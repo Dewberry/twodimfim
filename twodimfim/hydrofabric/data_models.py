@@ -1,0 +1,150 @@
+from functools import cached_property
+from pathlib import Path
+from typing import cast
+
+import geopandas as gpd
+from shapely import LineString, Polygon
+from shapely.geometry.base import BaseGeometry
+
+from twodimfim.consts import (
+    COMMON_CRS,
+    DIVIDE_ID_COL,
+    DIVIDE_ID_PREFIX,
+    DIVIDES_LAYER,
+    HYDROFABRIC_BASE_URI,
+    STREAM_ID_COL,
+    STREAM_ID_PREFIX,
+    STREAM_LAYER,
+)
+from twodimfim.utils.geospatial import (
+    perpendicular_line,
+)
+from twodimfim.utils.network import NetworkWalker
+
+
+class ReachContext:
+    def __init__(self, vpu: int, reach_id: int, us_ds_walk_dist_km: float = 10) -> None:
+        self.vpu = vpu
+        self.reach_id = reach_id
+        self.us_ds_walk_dist_km = us_ds_walk_dist_km
+        self.stream_id = STREAM_ID_PREFIX + str(reach_id)
+        self.divide_id = DIVIDE_ID_PREFIX + str(reach_id)
+        self.crs = COMMON_CRS
+        self.gpkg_path = HYDROFABRIC_BASE_URI.format(vpu=str(vpu).rjust(2, "0"))
+
+    def get_divide(self, divide_id: str) -> Polygon:
+        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} = '{divide_id}'"
+        geom = (
+            gpd.read_file(self.gpkg_path, sql=query).to_crs(self.crs).geometry.iloc[0]
+        )
+        return cast(Polygon, geom)
+
+    def get_centerline(self, stream_id: str) -> LineString:
+        query = f"SELECT * FROM {STREAM_LAYER} WHERE {STREAM_ID_COL} = '{stream_id}'"
+        geom = (
+            gpd.read_file(self.gpkg_path, sql=query).to_crs(self.crs).geometry.iloc[0]
+        )
+        return cast(LineString, geom)
+
+    @cached_property
+    def walker(self) -> NetworkWalker:
+        return NetworkWalker(self.gpkg_path)
+
+    @cached_property
+    def divide(self) -> Polygon:
+        return self.get_divide(self.divide_id)
+
+    @cached_property
+    def centerline(self) -> LineString:
+        return self.get_centerline(self.stream_id)
+
+    @cached_property
+    def us_ms_divide(self) -> Polygon:
+        """Upstream divide polygon along mainstem."""
+        us_ms_id = DIVIDE_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
+        return self.get_divide(us_ms_id)
+
+    @cached_property
+    def us_ms_centerline(self) -> LineString:
+        """Upstream divide polygon along mainstem."""
+        us_ms_id = STREAM_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
+        return self.get_centerline(us_ms_id)
+
+    @cached_property
+    def all_us_divides(self) -> Polygon:
+        """All upstream divides."""
+        us_divides = self.walker.walk_network_us(self.reach_id, self.us_ds_walk_dist_km)
+        us_divides_str = "','".join([DIVIDE_ID_PREFIX + str(i) for i in us_divides])
+        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} in ('{us_divides_str}')"
+        geom = (
+            gpd.read_file(self.gpkg_path, sql=query)
+            .to_crs(self.crs)
+            .dissolve()
+            .geometry.iloc[0]
+        )
+        return cast(Polygon, geom)
+
+    @cached_property
+    def all_ds_divides(self) -> Polygon:
+        """All downstream divides."""
+        ds_divides = self.walker.walk_network_ds(self.reach_id, self.us_ds_walk_dist_km)
+        ds_divides_str = "','".join([DIVIDE_ID_PREFIX + str(i) for i in ds_divides])
+        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} in ('{ds_divides_str}')"
+        geom = (
+            gpd.read_file(self.gpkg_path, sql=query)
+            .to_crs(self.crs)
+            .dissolve()
+            .geometry.iloc[0]
+        )
+        return cast(Polygon, geom)
+
+    def export_to_dir(self, export_dir: str | Path) -> dict[str, str]:
+        export_dir = Path(export_dir)
+        out_dict = {}
+
+        for i in [
+            "divide",
+            "centerline",
+            "us_ms_divide",
+            "us_ms_centerline",
+            "all_us_divides",
+            "all_ds_divides",
+        ]:
+            geom = getattr(self, i)
+            out_path = export_dir / f"{i}.parquet"
+            self.export_shape(geom, out_path)
+            out_dict[i] = str(out_path)
+
+        return out_dict
+
+    def export_shape(self, geometry: BaseGeometry, out_path: str | Path) -> None:
+        gpd.GeoDataFrame({"ind": [1]}, geometry=[geometry], crs=self.crs).to_parquet(
+            out_path
+        )
+
+    def make_us_bc_line(
+        self,
+        walk_us_dist_pct: float = 0.25,
+        inflow_width: float = 10,
+    ):
+        # Walk upstream a bit for u/s boundary condition
+        walk_us_dist = self.us_ms_centerline.length * walk_us_dist_pct
+        us_bc_pt = self.us_ms_centerline.interpolate(1 - walk_us_dist)
+        return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
+
+    def export_default_domain(
+        self,
+        export_dir: str | Path,
+        walk_us_dist_pct: float = 0.25,
+        inflow_width: float = 10,
+    ) -> dict[str, str]:
+        # Export standard elements
+        out_dict = self.export_to_dir(export_dir)
+
+        # Export additional elements
+        geom = self.make_us_bc_line(walk_us_dist_pct, inflow_width)
+        out_path = Path(export_dir) / "us_bc_line.parquet"
+        self.export_shape(geom, out_path)
+        out_dict["us_bc_line"] = str(out_path)
+
+        return out_dict
