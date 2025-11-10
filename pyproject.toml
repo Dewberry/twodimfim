@@ -1,0 +1,11 @@
+[project]
+name = "twodimfim"
+version = "0.1.0"
+description = ""
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ripple1d*"]
+
+[tool.ruff]
+select = ["I"]

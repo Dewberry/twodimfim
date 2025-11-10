@@ -1,0 +1,25 @@
+{
+  "name": "Lisflood App Dev",
+  "image": "mambaorg/micromamba",
+
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "source=/root/lisflood/01_commmunity_nextgen.gpkg,target=/data/01_commmunity_nextgen.gpkg,type=bind"
+  ],
+
+  "workspaceFolder": "/workspace",
+
+  "remoteUser": "root",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}
