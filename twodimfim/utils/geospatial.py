@@ -4,12 +4,17 @@ from math import ceil, floor
 from typing import Iterator
 
 import numpy as np
+import pyproj
 import rasterio.features
 from affine import Affine
 from pyproj import Transformer
 from shapely import LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+
+# Seems to fix an issue where transforms were all going infinite?
+print(pyproj.__version__)
+print(pyproj.datadir.get_data_dir())  # should show path to proj.db
 
 
 @dataclass
