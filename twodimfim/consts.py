@@ -1,5 +1,5 @@
 ### HYDROFABRIC ###
-HYDROFABRIC_BASE_URI = "/data/{vpu}_commmunity_nextgen.gpkg"
+HYDROFABRIC_BASE_URI = "/hydrofabric/{vpu}_commmunity_nextgen.gpkg"
 DIVIDES_LAYER = "divides"
 STREAM_LAYER = "flowpaths"
 TREE_LAYER = "network"
