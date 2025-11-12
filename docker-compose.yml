@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  streamlit-app:
+    image: lisflood-st-app
+    container_name: streamlit-app
+    user: "${UID}:${GID}"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+      - /root/lisflood/01_commmunity_nextgen.gpkg:/hydrofabric/01_commmunity_nextgen.gpkg
+    environment:
+      - MODEL_HOST=lisflood-runner
+      - MODEL_PORT=5000
+    depends_on:
+      - lisflood-runner
+
+  lisflood-runner:
+    image: lisflood-gpu
+    container_name: lisflood-runner
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/data
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
