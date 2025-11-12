@@ -102,12 +102,13 @@ class HydraulicModelRun:
     initial_tstep: float = 0.5
     initial_state: str | None = None
     run_dir: str | None = None
+    par_path: str | None = None
+    bci_path: str | None = None
 
     def __post_init__(self):
         self.boundary_conditions = [
             BoundaryCondition(**i) for i in self.boundary_conditions
         ]
-
 
 @dataclass
 class ModelDomain:
@@ -133,8 +134,10 @@ class ModelDomain:
 
     @classmethod
     def from_dict(cls, d: dict) -> dict:
-        d["terrain"] = Terrain(**d["terrain"])
-        d["roughness"] = Roughness(**d["roughness"])
+        d["terrain"] = Terrain(**d["terrain"]) if d["terrain"] is not None else None
+        d["roughness"] = (
+            Roughness(**d["roughness"]) if d["roughness"] is not None else None
+        )
         d["transform"] = Affine(**d["transform"])
         return cls(**d)
 
@@ -284,9 +287,21 @@ class HydraulicModel:
     @classmethod
     def from_dict(cls, d: dict):
         context = HydraulicModelContext.from_dict(d["context"])
-        domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
-        vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
-        # runs = {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
+        domains = (
+            {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
+            if d["domains"] is not None
+            else None
+        )
+        vectors = (
+            {k: VectorDataset(**v) for k, v in d["vectors"].items()}
+            if d["vectors"] is not None
+            else None
+        )
+        runs = (
+            {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
+            if d["runs"] is not None
+            else None
+        )
         runs = {}
         return cls(context, domains, vectors, runs, d["identifiers"], d["notes"])
 
@@ -301,7 +316,7 @@ class HydraulicModel:
             "context": self.context.to_dict(),
             "domains": {k: v.to_dict() for k, v in self.domains.items()},
             "vectors": {k: asdict(v) for k, v in self.vectors.items()},
-            "runs": {},
+            "runs": {k: asdict(v) for k, v in self.runs.items()},
             "identifiers": self.identifiers,
             "notes": self.notes,
         }
@@ -309,6 +324,10 @@ class HydraulicModel:
     def to_file(self, out_path: str | Path) -> None:
         with open(out_path, mode="w") as f:
             json.dump(self.to_dict(), f, indent=4)
+
+    def save(self) -> None:
+        out_path = self.context.model_root / "model.json"
+        self.to_file(out_path)
 
     def build_run(self, run: str) -> None:
         # TODO: will need to expand this for other models.
@@ -319,7 +338,6 @@ class HydraulicModel:
         run_dir.mkdir(exist_ok=True, parents=True)
 
         # Generate boundary conditions
-        bci_path = run_dir / BCI_FILE
         bc_lines = []
         for i in run_inst.boundary_conditions:
             row_pts = domain.geometry_to_bc_points(
@@ -341,17 +359,16 @@ class HydraulicModel:
                     ]
                 )
                 bc_lines.append(bc)
-            with open(bci_path, mode="w+") as f:
+            with open(run_inst.bci_path, mode="w+") as f:
                 f.writelines(bc_lines)
 
         # Generate parameter file
-        par_file = run_dir / PAR_FILE
         cfg = {
             "resroot": run_inst.idx,
             "dirroot": run_inst.run_dir,
             "DEMfile": domain.terrain.path,
             "manningfile": domain.roughness.path,
-            "bcifile": str(bci_path),
+            "bcifile": str(run_inst.bci_path),
             "saveint": run_inst.save_interval,
             "massint": run_inst.mass_interval,
             "sim_time": run_inst.sim_time,
@@ -359,12 +376,14 @@ class HydraulicModel:
             "acceleration": "",
             "elevoff": "",
         }
-        with open(par_file, mode="w") as f:
+        with open(run_inst.par_path, mode="w") as f:
             for k, v in cfg.items():
                 f.write(f"{k} {v}\n")
 
     def add_run(self, run: HydraulicModelRun) -> None:
         run.run_dir = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx)
+        run.par_path = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx / PAR_FILE)
+        run.bci_path = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx / BCI_FILE)
         self.runs[run.idx] = run
         self.build_run(run.idx)
 
