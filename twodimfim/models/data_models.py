@@ -110,6 +110,7 @@ class HydraulicModelRun:
             BoundaryCondition(**i) for i in self.boundary_conditions
         ]
 
+
 @dataclass
 class ModelDomain:
     idx: str
@@ -302,7 +303,6 @@ class HydraulicModel:
             if d["runs"] is not None
             else None
         )
-        runs = {}
         return cls(context, domains, vectors, runs, d["identifiers"], d["notes"])
 
     @classmethod
@@ -382,8 +382,12 @@ class HydraulicModel:
 
     def add_run(self, run: HydraulicModelRun) -> None:
         run.run_dir = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx)
-        run.par_path = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx / PAR_FILE)
-        run.bci_path = str(self.context.model_root / DEFAULT_RUN_DIR / run.idx / BCI_FILE)
+        run.par_path = str(
+            self.context.model_root / DEFAULT_RUN_DIR / run.idx / PAR_FILE
+        )
+        run.bci_path = str(
+            self.context.model_root / DEFAULT_RUN_DIR / run.idx / BCI_FILE
+        )
         self.runs[run.idx] = run
         self.build_run(run.idx)
 
