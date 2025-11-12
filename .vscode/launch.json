@@ -11,6 +11,13 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
+        },
+        {
+        "name": "Python:Streamlit",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "streamlit",
+        "args": ["run", "${workspaceFolder}/app/app.py", "--server.port", "2000"]
         }
     ]
 }
