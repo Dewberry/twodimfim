@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 def write_bci_file(
-    run: HydraulicModelRun, domain: ModelDomain, vectors: dict[str, VectorDataset]
+    run: "HydraulicModelRun", domain: "ModelDomain", vectors: dict[str, "VectorDataset"]
 ) -> None:
     bc_lines = []
     for i in run.boundary_conditions:
@@ -34,7 +34,7 @@ def write_bci_file(
             f.writelines(bc_lines)
 
 
-def write_par_file(run: HydraulicModelRun, domain: ModelDomain) -> None:
+def write_par_file(run: "HydraulicModelRun", domain: "ModelDomain") -> None:
     cfg = {
         "resroot": run.idx,
         "dirroot": run.run_dir,

@@ -44,7 +44,7 @@ class HydraulicModelMetadata:
     author: str = ""
     model_brand: SupportedModels = "LISFLOOD-FP"
     engineer_notes: str = ""
-    tags: list[str] = []
+    tags: list[str] = field(default_factory=list)
     path_types: ModelPathTypes = "relative"
     twodimfim_version: str = self_version
     creation_date: datetime = field(default_factory=datetime.now)
@@ -76,7 +76,8 @@ class HydraulicModelContext:
         return ":".join(self.crs.to_authority())
 
 
-default_context = HydraulicModelContext(Path(".").resolve(), CRS(COMMON_CRS))
+def generate_generic_context():
+    return HydraulicModelContext(Path(".").resolve(), CRS(COMMON_CRS))
 
 
 @dataclass
@@ -84,7 +85,9 @@ class VectorDataset:
     idx: str
     path_stem: str
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     @cached_property
     def path(self) -> Path:
@@ -119,7 +122,9 @@ class Terrain:
     path_stem: str
     vertical_units: UnitsType
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     @cached_property
     def path(self) -> Path:
@@ -134,7 +139,9 @@ class Terrain:
         cols: int,
         rows: int,
         units: UnitsType = "meters",
-        context: HydraulicModelContext = default_context,
+        context: HydraulicModelContext = field(
+            default_factory=generate_generic_context, repr=False
+        ),
     ):
         idx = f"{domain_idx}_usgs_dem_{resolution}"
         path_stem = Path(DEFAULT_RASTER_DIR) / f"{idx}.ascii"
@@ -150,7 +157,9 @@ class Roughness:
     idx: str
     path_stem: str
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     @cached_property
     def path(self) -> Path:
@@ -164,7 +173,9 @@ class Roughness:
         bbox: BBox,
         cols: int,
         rows: int,
-        context: HydraulicModelContext = default_context,
+        context: HydraulicModelContext = field(
+            default_factory=generate_generic_context, repr=False
+        ),
     ):
         idx = f"{domain_idx}_nlcd_roughness_{resolution}"
         path_stem = Path(DEFAULT_RASTER_DIR) / f"{idx}.ascii"
@@ -188,7 +199,9 @@ class HydraulicModelRun:
     run_dir_stem: str = DEFAULT_RUN_DIR
     parfile_name: str = PAR_FILE
     bcifile_name: str = BCI_FILE
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]):
@@ -218,7 +231,9 @@ class ModelDomain:
     resolution: float
     terrain: Terrain | None = None
     roughness: Roughness | None = None
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     def __post_init__(self):
         if self.terrain is not None:
@@ -232,7 +247,9 @@ class ModelDomain:
         idx: str,
         bbox: BBox,
         resolution: float,
-        context: HydraulicModelContext = default_context,
+        context: HydraulicModelContext = field(
+            default_factory=generate_generic_context, repr=False
+        ),
     ):
         bbox = snap_bbox_to_grid(bbox, resolution)
 
@@ -328,7 +345,9 @@ class HydraulicModel:
     domains: dict[str, ModelDomain] = field(default_factory=dict)
     vectors: dict[str, VectorDataset] = field(default_factory=dict)
     runs: dict[str, HydraulicModelRun] = field(default_factory=dict)
-    _context: HydraulicModelContext = field(default=default_context, repr=False)
+    _context: HydraulicModelContext = field(
+        default_factory=generate_generic_context, repr=False
+    )
 
     def __post_init__(self):
         for i in [*self.domains.values(), *self.vectors.values(), *self.runs.values()]:
