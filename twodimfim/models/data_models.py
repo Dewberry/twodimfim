@@ -49,7 +49,7 @@ class HydraulicModelMetadata:
     twodimfim_version: str = self_version
     creation_date: datetime = field(default_factory=datetime.now)
     last_edited: datetime = field(default_factory=datetime.now)
-    crs: CRS = field(default_factory=lambda: CRS.from_epsg(COMMON_CRS))
+    crs: CRS = field(default_factory=lambda: CRS.from_user_input(COMMON_CRS))
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -108,6 +108,11 @@ class VectorDataset:
     def geom_type(self) -> str:
         return self.shape.geom_type
 
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        del d["_context"]
+        return d
+
 
 @dataclass
 class BoundaryCondition:
@@ -144,12 +149,17 @@ class Terrain:
         ),
     ):
         idx = f"{domain_idx}_usgs_dem_{resolution}"
-        path_stem = Path(DEFAULT_RASTER_DIR) / f"{idx}.ascii"
-        save_path = context.model_root / path_stem
+        save_path = context.model_root / DEFAULT_RASTER_DIR / f"{idx}.ascii"
+        path_stem = save_path.relative_to(context.model_root)
         meta = get_usgs_dem(
             save_path, bbox, cols, rows, context.crs_authority_str, units
         )
         return cls(idx, str(path_stem), units, meta, context)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        del d["_context"]
+        return d
 
 
 @dataclass
@@ -178,10 +188,15 @@ class Roughness:
         ),
     ):
         idx = f"{domain_idx}_nlcd_roughness_{resolution}"
-        path_stem = Path(DEFAULT_RASTER_DIR) / f"{idx}.ascii"
-        save_path = context.model_root / path_stem
+        save_path = context.model_root / DEFAULT_RASTER_DIR / f"{idx}.ascii"
+        path_stem = save_path.relative_to(context.model_root)
         meta = get_nlcd_mannings(save_path, bbox, cols, rows, context.crs_authority_str)
         return cls(idx, str(path_stem), meta, context)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        del d["_context"]
+        return d
 
 
 @dataclass
@@ -208,6 +223,7 @@ class HydraulicModelRun:
         d["boundary_conditions"] = [
             BoundaryCondition(**i) for i in d["boundary_conditions"]
         ]
+        return cls(**d)
 
     @property
     def run_dir(self) -> Path:
@@ -220,6 +236,11 @@ class HydraulicModelRun:
     @property
     def bcifile_path(self) -> Path:
         return self.run_dir / self.bcifile_name
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        del d["_context"]
+        return d
 
 
 @dataclass
@@ -269,11 +290,12 @@ class ModelDomain:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        del d["_context"]
         d["transform"] = self.transform._asdict()
         if self.terrain is not None:
-            d["terrain"] = asdict(self.terrain)
+            d["terrain"] = self.terrain.to_dict()
         if self.roughness is not None:
-            d["roughness"] = asdict(self.roughness)
+            d["roughness"] = self.roughness.to_dict()
         return d
 
     @property
@@ -388,7 +410,9 @@ class HydraulicModel:
         std_meta = DatasetMetadata("file", reach_context.gpkg_path)
         vectors = {}
         for k, v in _vectors.items():
-            vectors[k] = VectorDataset(k, str(vector_dir / v), std_meta, context)
+            vectors[k] = VectorDataset(
+                k, str(Path(v).relative_to(context.model_root)), std_meta, context
+            )
 
         # Make model domain
         base_bbox = BBox(
@@ -399,6 +423,7 @@ class HydraulicModel:
         domains = {idx: ModelDomain.from_bbox(idx, base_bbox, resolution, context)}
 
         # Make metadata
+        metadata["title"] = idx
         meta = HydraulicModelMetadata(**metadata)
 
         # Make model
@@ -406,10 +431,10 @@ class HydraulicModel:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]):
-        metadata = HydraulicModelMetadata(**d["metadata"])
+        metadata = HydraulicModelMetadata.from_dict(d["metadata"])
         if "context" in d:
             context = HydraulicModelContext(
-                Path(d["context"]["model_root"]), CRS.from_wkt(d["metadata"]["crs"])
+                Path(d["context"]["model_root"]), metadata.crs
             )
         domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
         vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
@@ -420,15 +445,15 @@ class HydraulicModel:
     def from_file(cls, in_path: str | Path):
         with open(in_path) as f:
             d = json.load(f)
-        d["context"]["model_root"] = Path(in_path).parent
+        d["context"] = {"model_root": Path(in_path).parent}
         return cls.from_dict(d)
 
     def to_dict(self) -> dict:
         return {
             "metadata": self.metadata.to_dict(),
             "domains": {k: v.to_dict() for k, v in self.domains.items()},
-            "vectors": {k: asdict(v) for k, v in self.vectors.items()},
-            "runs": {k: asdict(v) for k, v in self.runs.items()},
+            "vectors": {k: v.to_dict() for k, v in self.vectors.items()},
+            "runs": {k: v.to_dict() for k, v in self.runs.items()},
         }
 
     def to_file(self, out_path: str | Path) -> None:
@@ -450,7 +475,7 @@ class HydraulicModel:
 
     def add_run(self, run: HydraulicModelRun | dict[str, Any]) -> None:
         if isinstance(run, dict):
-            run = HydraulicModelRun(**run)
+            run = HydraulicModelRun.from_dict(run)
         self.write_run(run)
         self.runs[run.idx] = run
 

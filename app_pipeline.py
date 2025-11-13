@@ -27,24 +27,25 @@ else:
     model.domains[current_domain].load_3dep_terrain()
     model.domains[current_domain].load_nlcd_roughness()
 
-    model.to_file(model_path)
+    model.save()
 
 
 # Create several plans.  User inputs discharges
 run_dict = [
     {
         "idx": "test",
-        "type_": "quasi-steady",
-        "domain": "hydrofabric_10",
+        "run_type": "quasi-steady",
+        "domain": "hydrofabric_res_10",
         "boundary_conditions": [
-            {"geometry_vector": "us_bc_line", "type_": "QFIX", "value": 800},
-            {"geometry_vector": "all_ds_divides", "type_": "FREE", "value": 0.01},
+            {"geometry_vector": "us_bc_line", "bc_type": "QFIX", "value": 800},
+            {"geometry_vector": "all_ds_divides", "bc_type": "FREE", "value": 0.01},
         ],
     }
 ]
 for run in run_dict:
-    model.add_run(HydraulicModelRun(**run))
+    model.add_run(run)
 
+model.save()
 
 # Run the model
 runs = ["test"]

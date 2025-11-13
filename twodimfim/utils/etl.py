@@ -57,10 +57,9 @@ def get_nlcd_mannings(
     # Download data
     r = requests.get(url)
     with MemoryFile(r.content) as memfile:
-        src_crs = memfile.crs
-        t = [f"reproject: {':'.join(src_crs.to_authority())} -> {crs}"]
         with memfile.open() as src:
             out_meta = src.meta
+            t = [f"reproject: {':'.join(src.crs.to_authority())} -> {crs}"]
             nlcd, out_transform = mask.mask(
                 src, [bbox.shape], all_touched=True, crop=True
             )
