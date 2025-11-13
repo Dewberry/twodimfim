@@ -5,7 +5,9 @@ from typing import Iterator
 
 import numpy as np
 import pyproj
+import pyproj.datadir
 import rasterio.features
+import rasterio.transform
 from affine import Affine
 from pyproj import Transformer
 from shapely import LineString, Point, Polygon, box
@@ -13,8 +15,8 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
 # Seems to fix an issue where transforms were all going infinite?
-print(pyproj.__version__)
-print(pyproj.datadir.get_data_dir())  # should show path to proj.db
+pyproj.__version__
+pyproj.datadir.get_data_dir()
 
 
 @dataclass
@@ -93,10 +95,10 @@ def rasterize_line(
     )
 
     # Get row/col indices where the line intersects
-    rows, cols = np.where(mask == 1)
+    sel_rows, sel_cols = np.where(mask == 1)
 
     # Convert row/col indices to map (x, y) coordinates
-    xs, ys = rasterio.transform.xy(transform, rows, cols)
+    xs, ys = rasterio.transform.xy(transform, sel_rows, sel_cols)
     return list(zip(xs, ys))
 
 

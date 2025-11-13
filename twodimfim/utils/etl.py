@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,6 @@ from rasterio import mask
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
-from shapely import Polygon, box
 
 from twodimfim.consts import (
     COMMON_CRS,
@@ -19,28 +19,28 @@ from twodimfim.consts import (
     MANNINGS_LC_LOOKUP,
     NLCD_WMS_URL,
     USGS_3DEP_URL,
+    SourceType,
 )
+from twodimfim.models.data_models import UnitsType
 from twodimfim.utils.geospatial import BBox, transform_shape
 
 ### DATA MODELS ###
 
-SourceType = Literal["file", "url"]
 
-# TODO: Implement this
-# @dataclass
-# class DatasetMetadata:
-#     """Metadata tracking dataset provenance and processing."""
+@dataclass
+class DatasetMetadata:
+    """Metadata tracking dataset provenance."""
 
-#     source_type: SourceType
-#     source_location: str
-#     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-#     transformations: list[str] = field(default_factory=list)
-#     extra: dict[str, Any] = field(default_factory=dict)
+    source_type: SourceType
+    source_location: str
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    transformations: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def get_nlcd_mannings(
     out_path: str | Path, bbox: BBox, cols: int, rows: int, crs: str = COMMON_CRS
-):
+) -> DatasetMetadata:
     # Get download URL
     url = (
         WebMapService(NLCD_WMS_URL)
@@ -57,6 +57,8 @@ def get_nlcd_mannings(
     # Download data
     r = requests.get(url)
     with MemoryFile(r.content) as memfile:
+        src_crs = memfile.crs
+        t = [f"reproject: {':'.join(src_crs.to_authority())} -> {crs}"]
         with memfile.open() as src:
             out_meta = src.meta
             nlcd, out_transform = mask.mask(
@@ -67,6 +69,7 @@ def get_nlcd_mannings(
     mannings_array = np.full_like(nlcd, np.nan, dtype=float)
     for code, n_value in MANNINGS_LC_LOOKUP.items():
         mannings_array = np.where(nlcd == code, n_value, mannings_array)
+    t.append(f"mannings_lookup: {json.dumps(MANNINGS_LC_LOOKUP)}")
     out_meta["dtype"] = "float32"
     out_meta["driver"] = "AAIGrid"
 
@@ -74,13 +77,22 @@ def get_nlcd_mannings(
     with rasterio.open(out_path, "w", **out_meta) as dest:
         dest.write(mannings_array)
 
+    # Generate and return metadata
+    return DatasetMetadata("url", NLCD_WMS_URL, transformations=t)
+
 
 def get_usgs_dem(
-    out_path: str | Path, bbox: BBox, cols: int, rows: int, crs: str = COMMON_CRS
-):
+    out_path: str | Path,
+    bbox: BBox,
+    cols: int,
+    rows: int,
+    crs: str = COMMON_CRS,
+    units: UnitsType = "meters",
+) -> DatasetMetadata:
     # Open remote dataset
     with rasterio.open(USGS_3DEP_URL) as src:
-        src_bbox = transform_shape(bbox.shape, crs, src.crs)
+        src_crs = src.crs
+        src_bbox = transform_shape(bbox.shape, crs, src_crs)
         values, out_transform = mask.mask(src, [src_bbox], all_touched=True, crop=True)
 
         # Define target metadata
@@ -95,7 +107,11 @@ def get_usgs_dem(
                 "driver": "AAIGrid",
             }
         )
-        values *= FT_TO_METERS
+        t = [f"reproject: {':'.join(src_crs.to_authority())} -> {crs}"]
+
+        if units == "meters":
+            values *= FT_TO_METERS
+            t.append(f"convert feet to meters: {FT_TO_METERS}")
 
         # Reproject and write data
         with rasterio.open(out_path, "w", **kwargs) as dst:
@@ -108,3 +124,6 @@ def get_usgs_dem(
                 dst_crs=crs,
                 resampling=Resampling.nearest,
             )
+
+    # Generate and return metadata
+    return DatasetMetadata("url", USGS_3DEP_URL, transformations=t)
