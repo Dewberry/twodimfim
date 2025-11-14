@@ -423,7 +423,7 @@ class HydraulicModel:
         domains = {idx: ModelDomain.from_bbox(idx, base_bbox, resolution, context)}
 
         # Make metadata
-        metadata["title"] = idx
+        metadata["title"] = f"hydrofabric_{vpu}_{reach_id}"
         meta = HydraulicModelMetadata(**metadata)
 
         # Make model
