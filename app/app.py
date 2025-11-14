@@ -1,7 +1,4 @@
-import base64
-import io
 import os
-import time
 from pathlib import Path
 
 import numpy as np
@@ -11,14 +8,74 @@ import rasterio
 import requests
 import streamlit as st
 from PIL import Image
+from pyproj import CRS
 from rasterio.warp import Resampling, calculate_default_transform, reproject
+from shapely import unary_union
 
-from twodimfim.models.data_models import HydraulicModel, HydraulicModelRun
+from twodimfim.models.data_models import (
+    BoundaryCondition,
+    HydraulicModel,
+    HydraulicModelMetadata,
+    HydraulicModelRun,
+    ModelDomain,
+    VectorDataset,
+)
+from twodimfim.utils.etl import DatasetMetadata
+from twodimfim.utils.geospatial import BBox
 
-DATA_DIR = "/data"
+DATA_DIR = os.getenv("MODEL_DIR", "/data")
 MODEL_HOST = os.getenv("MODEL_HOST", "lisflood-model")
 MODEL_PORT = os.getenv("MODEL_PORT", "5000")
 BASE_URL = f"http://{MODEL_HOST}:{MODEL_PORT}"
+
+MARKDOWN_DIVIDER = """
+            <div style="width:100%; margin-top:10px; margin-bottom:30px; padding:0;">
+            <hr style="margin:0; padding:0; height:1px; border:none; background-color:#919191;">
+            </div>
+            """
+
+### WIDGETS ###
+
+
+def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
+    if defaults is None:
+        bc = pd.DataFrame(
+            {
+                "Geometry": [],
+                "Type": [],
+                "Value": [],
+            }
+        )
+    else:
+        geoms = []
+        types = []
+        values = []
+        for i in defaults:
+            geoms.append(i["geometry_vector"])
+            types.append(i["bc_type"])
+            values.append(i["value"])
+        bc = pd.DataFrame(
+            {
+                "Geometry": geoms,
+                "Type": types,
+                "Value": values,
+            }
+        )
+    bc["Geometry"] = bc["Geometry"].astype(str)
+    bc["Type"] = bc["Type"].astype(str)
+    geoms = st.session_state["model"].vectors.keys()
+    ccfg = {
+        "Geometry": st.column_config.SelectboxColumn(options=geoms),
+        "Type": st.column_config.SelectboxColumn(options=["QFIX", "HFIX", "FREE"]),
+        "Value": st.column_config.NumberColumn(),
+    }
+    st.text("Boundary Conditions")
+    if editable:
+        nr = "dynamic"
+    else:
+        nr = "fixed"
+    return st.data_editor(bc, num_rows=nr, column_config=ccfg)
+
 
 ### MAP PANEL ###
 
@@ -98,6 +155,8 @@ def map_tab():
             "us_bc_line",
             "centerline",
         ]:
+            if not k in st.session_state["model"].vectors:
+                continue
             gdf = st.session_state["model"].vectors[k].gdf
             gdf["feature"] = k
             gdf = gdf.to_crs("EPSG:4326")
@@ -204,22 +263,7 @@ def new_run():
     type_ = st.selectbox("Run Type", options=types_)
     domains = st.session_state["model"].domains.keys()
     domain = st.selectbox("Model Domain", options=domains)
-    bc_default = pd.DataFrame(
-        {
-            "Geometry": [],
-            "Type": [],
-            "Value": [],
-        }
-    )
-    bc_default["Geometry"] = bc_default["Geometry"].astype(str)
-    bc_default["Type"] = bc_default["Type"].astype(str)
-    ccfg = {
-        "Geometry": st.column_config.TextColumn(),
-        "Type": st.column_config.SelectboxColumn(options=["QFIX", "HFIX", "FREE"]),
-        "Value": st.column_config.NumberColumn(),
-    }
-    st.text("Boundary Conditions")
-    bcs = st.data_editor(bc_default, num_rows="dynamic", column_config=ccfg)
+    bcs = bc_maker()
 
     with st.expander("Additional parameters"):
         save_interval = st.number_input("Save Interval", value=900)
@@ -230,12 +274,12 @@ def new_run():
 
     if st.button("Save Run"):
         bcs_refactor = [
-            {"geometry_vector": i.Geometry, "type_": i.Type, "value": i.Value}
+            BoundaryCondition(geometry_vector=i.Geometry, bc_type=i.Type, value=i.Value)
             for i in bcs.itertuples()
         ]
         tmp_run = HydraulicModelRun(
             idx=idx,
-            type_=type_.lower(),
+            run_type=type_.lower(),
             domain=domain,
             boundary_conditions=bcs_refactor,
             save_interval=save_interval,
@@ -248,48 +292,188 @@ def new_run():
         st.rerun()
 
 
+@st.dialog("Create a new domain")
+def new_domain(cur_domain: str = ""):
+    st.markdown("Create a domain from the bounding box of selected geometries.")
+    idx = st.text_input("Domain ID", value=cur_domain)
+    if cur_domain in st.session_state["model"].domains:
+        default_res = st.session_state["model"].domains[idx].resolution
+        but_text = "Update domain"
+    else:
+        default_res = 10
+        but_text = "Create domain"
+    resolution = st.number_input("Resolution (m)", value=default_res)
+    vectors = st.session_state["model"].vectors
+    geoms = st.multiselect("Geometries", options=vectors.keys())
+    buffer = st.number_input("Buffer distance (m)", value=100)
+    if st.button(but_text):
+        base_bbox = BBox(*unary_union([vectors[i].shape for i in geoms]).bounds)
+        base_bbox.buffer(buffer)
+        st.session_state["model"].domains[idx] = ModelDomain.from_bbox(
+            idx, base_bbox, resolution, st.session_state["model"]._context
+        )
+        st.rerun()
+
+
+@st.dialog("Create a vector layer")
+def add_vector():
+    vector_dir = next(iter(st.session_state["model"].vectors.values())).path.parent
+    existing_paths = set([i.path for i in st.session_state["model"].vectors.values()])
+    vector_files = list(set(vector_dir.iterdir()).difference(existing_paths))
+    opts = [i.stem for i in vector_files]
+    geom = st.selectbox("Geometry", options=opts)
+    ds_src = st.text_input("Describe data original source")
+    mods = st.text_input("Describe any manipulation done to the source dataset")
+    if st.button("Add geometry", disabled=ds_src == ""):
+        i = opts.index(geom)
+        idx = geom
+        meta = DatasetMetadata(
+            "file", ds_src, transformations=[f"user_modifications: {mods}"]
+        )
+        stem = str(
+            vector_files[i].relative_to(st.session_state["model"]._context.model_root)
+        )
+        geom = VectorDataset(idx, stem, meta, st.session_state["model"]._context)
+        st.session_state["model"].vectors[idx] = geom
+
+
 def save_model():
     if st.session_state["model"] is not None:
         st.session_state["model"].save()
 
 
 def model_control():
-    with st.container(border=True, width=400) as c:
+    with st.container(width=400, vertical_alignment="bottom") as c:
         c1, c2, c3 = st.columns(3, gap="small")
-        c1.button("New Model", width=125, on_click=new_model)
-        c2.button("Load Model", width=125, on_click=load_model)
-        c3.button("Save Model", width=125, on_click=save_model)
+        c1.button("New Model", width=125, on_click=new_model, type="primary")
+        c2.button("Load Model", width=125, on_click=load_model, type="primary")
+        c3.button("Save Model", width=125, on_click=save_model, type="primary")
+
+
+def model_summary_panel():
+    meta: HydraulicModelMetadata = st.session_state["model"].metadata
+    c1, c2 = st.columns(2)
+    with c1:
+        title = st.text_input("Title", meta.title)
+        author = st.text_input("Author", meta.author)
+        brands = ["LISFLOOD-FP", "TRITON", "SFINCS"]
+        brand = st.selectbox(
+            "Brand", options=brands, index=brands.index(meta.model_brand)
+        )
+        crs = st.text_input("CRS", ":".join(meta.crs.to_authority()))
+    with c2:
+        notes = st.text_area("Engineer's notes", meta.engineer_notes, height=178)
+        if len(meta.tags) > 0:
+            tag_opts = meta.tags
+        else:
+            tag_opts = []
+        tags = st.multiselect(
+            "Tags", options=tag_opts, accept_new_options=True, default=meta.tags
+        )
+        if st.button("Save Summary", use_container_width=True, type="primary"):
+            meta.title = title
+            meta.author = author
+            meta.model_brand = brand
+            meta.crs = CRS.from_user_input(crs)
+            meta.engineer_notes = notes
+            meta.tags = tags
+            st.session_state["model"].save()
+
+
+def geometry_editor():
+    if st.button("Add vector", type="primary", use_container_width=True):
+        add_vector()
+    to_delete = []
+    for i in st.session_state["model"].vectors:
+        with st.container(border=True):
+            c1, c2 = st.columns(2, vertical_alignment="center")
+            with c1:
+                with st.container(horizontal_alignment="left"):
+                    st.markdown(i)
+            with c2:
+                with st.container(horizontal_alignment="right"):
+                    if st.button("", icon=":material/close:", key=f"close_{i}"):
+                        to_delete.append(i)
+
+    for i in to_delete:
+        del st.session_state["model"].vectors[i]
+    if len(to_delete) > 0:
+        st.rerun()
 
 
 def domain_editor():
     domains = st.session_state["model"].domains.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         domain_ = st.selectbox("Select a domain", domains, index=0)
-        st.button("New domain")
-        st.button("Delete domain")
-    domain = st.session_state["model"].domains[domain_]
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            text = "\n\n".join(
-                [
-                    "**{}**: {}".format(i, getattr(domain.bbox, i))
-                    for i in ["xmin", "xmax", "ymin", "ymax"]
-                ]
-            )
-            st.markdown(text)
-        with c2:
-            text = f"**Columns**: {domain.cols}\n\n**Rows**: {domain.rows}\n\n**Resolution**: {domain.resolution}\n\n"
-            st.markdown(text)
-    with st.container(horizontal=True, vertical_alignment="bottom"):
-        if st.button("Download USGS Terrain"):
-            st.toast("Downloading USGS terrain", icon=":material/cloud_download:")
-            domain.load_3dep_terrain()
-            st.toast("Downloaded USGS terrain", icon=":material/download_done:")
-        if st.button("Download NLCD Roughness"):
-            st.toast("Downloading NLCD Roughness", icon=":material/cloud_download:")
-            domain.load_nlcd_roughness()
-            st.toast("Downloaded NLCD Roughness", icon=":material/download_done:")
+        st.button("New domain", on_click=new_domain)
+        if st.button("Delete domain"):
+            del st.session_state["model"].domains[domain_]
+            st.rerun()
+    if domain_ is not None:
+        domain = st.session_state["model"].domains[domain_]
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                text = "\n\n".join(
+                    [
+                        "**{}**: {}".format(i, getattr(domain.bbox, i))
+                        for i in ["xmin", "xmax", "ymin", "ymax"]
+                    ]
+                )
+                st.markdown(text)
+            with c2:
+                text = f"**Columns**: {domain.cols}\n\n**Rows**: {domain.rows}\n\n**Resolution**: {domain.resolution}\n\n"
+                st.markdown(text)
+                if st.button("Update domain"):
+                    new_domain(domain_)
+        with st.container(border=True):
+            has_terrain = domain.terrain is not None
+            c1, c2 = st.columns(2, vertical_alignment="bottom")
+            with c1:
+                with st.container(horizontal_alignment="left"):
+                    st.markdown("### Terrain")
+                    if has_terrain:
+                        st.badge("Terrain created", color="green")
+                    else:
+                        st.badge("Terrain not available", color="grey")
+            with c2:
+                with st.container(
+                    horizontal_alignment="right", vertical_alignment="bottom"
+                ):
+                    if st.button("Download USGS Terrain", disabled=has_terrain):
+                        st.toast(
+                            "Downloading USGS terrain", icon=":material/cloud_download:"
+                        )
+                        domain.load_3dep_terrain()
+                        st.toast(
+                            "Downloaded USGS terrain", icon=":material/download_done:"
+                        )
+                        st.rerun()
+
+        with st.container(border=True):
+            has_roughness = domain.roughness is not None
+            c1, c2 = st.columns(2, vertical_alignment="bottom")
+            with c1:
+                with st.container(horizontal_alignment="left"):
+                    st.markdown("### Roughness")
+                    if has_roughness:
+                        st.badge("Roughness created", color="green")
+                    else:
+                        st.badge("Roughness not available", color="grey")
+            with c2:
+                with st.container(
+                    horizontal_alignment="right", vertical_alignment="bottom"
+                ):
+                    if st.button("Download NLCD Roughness", disabled=has_roughness):
+                        st.toast(
+                            "Downloading NLCD Roughness",
+                            icon=":material/cloud_download:",
+                        )
+                        domain.load_nlcd_roughness()
+                        st.toast(
+                            "Downloaded NLCD Roughness", icon=":material/download_done:"
+                        )
+                        st.rerun()
 
 
 def run_editor():
@@ -297,7 +481,41 @@ def run_editor():
     with st.container(horizontal=True, vertical_alignment="bottom"):
         run_ = st.selectbox("Select a run", runs, index=0, key="redit")
         st.button("New run", on_click=new_run)
-        st.button("Delete run")
+        if st.button("Delete run"):
+            del st.session_state["model"].runs[run_]
+    if run_ is not None:
+        r: HydraulicModelRun = st.session_state["model"].runs[run_]
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                idx = st.text_input("ID", value=r.idx)
+                rtypes = ["Unsteady", "Quasi-steady"]
+                i = rtypes.index(r.run_type.capitalize())
+                rtype = st.selectbox("Run type", rtypes, index=i).lower()
+                domains = list(st.session_state["model"].domains.keys())
+                if r.domain in domains:
+                    domain = st.selectbox(
+                        "Domain", domains, index=domains.index(r.domain)
+                    )
+                else:
+                    domain = st.selectbox("Domain", domains)
+                save_interval = st.number_input(
+                    "Save interval (s)", value=r.save_interval
+                )
+                mass_interval = st.number_input(
+                    "Mass interval (s)", value=r.save_interval
+                )
+                steady_state_tolerance = (
+                    st.number_input(
+                        "Steady state tolerance (%)", value=r.save_interval * 100
+                    )
+                    / 100
+                )
+                initial_tstep = st.number_input(
+                    "Initial timestep (s)", value=r.save_interval
+                )
+            with c2:
+                bcs = bc_maker(r.boundary_conditions)
 
 
 def run_executor():
@@ -324,19 +542,39 @@ def run_model(run_path):
 
 
 def model_editor():
-    t1, t2, t3 = st.tabs(["Domain Editor", "Run Editor", "Run Executor"])
+    t1, t2, t3, t4, t5 = st.tabs(
+        [
+            "Model Summary",
+            "Geometry Editor",
+            "Domain Editor",
+            "Run Editor",
+            "Run Executor",
+        ]
+    )
     with t1:
-        domain_editor()
+        model_summary_panel()
     with t2:
-        run_editor()
+        geometry_editor()
     with t3:
+        domain_editor()
+    with t4:
+        run_editor()
+    with t5:
         run_executor()
 
 
 def editor_tab():
-    model_control()
-    if st.session_state["model"] is not None:
-        model_editor()
+    with st.container(border=True, gap=None):
+        c1, c2 = st.columns(2, vertical_alignment="bottom")
+        with c1:
+            st.markdown("# Model Editor")
+        with c2:
+            model_control()
+        st.markdown(MARKDOWN_DIVIDER, unsafe_allow_html=True)
+        if st.session_state["model"] is not None:
+            model_editor()
+        else:
+            st.space("small")
 
 
 def init_session_state():
@@ -355,7 +593,7 @@ def main():
         .stAppDeployButton {display:none;}
         .stAppHeader {display:none;}
         .block-container {
-               padding-top: 2rem;
+               padding-top: 0.5rem;
                padding-bottom: 0rem;
             }
     </style>
