@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from typing import Literal
 
 ### CUSTOM TYPES ###
@@ -22,7 +24,8 @@ DEFAULT_RUN_DIR = "runs"
 
 ### HYDROFABRIC ###
 
-HYDROFABRIC_BASE_URI = "/hydrofabric/{vpu}_commmunity_nextgen.gpkg"
+HYDROFABRIC_DIR = Path(os.getenv("HYDROFABRIC_DIR", "/hydrofabric"))
+HYDROFABRIC_BASE_URI = str(HYDROFABRIC_DIR / "{vpu}_commmunity_nextgen.gpkg")
 DIVIDES_LAYER = "divides"
 STREAM_LAYER = "flowpaths"
 TREE_LAYER = "network"

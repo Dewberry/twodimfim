@@ -88,7 +88,7 @@ def make_raster_layer(raster_path):
         data = src.read(1).astype("float32")
         transform = src.transform
         width, height = src.width, src.height
-    src_crs = st.session_state["model"].context.crs
+    src_crs = st.session_state["model"]._context.crs
 
     # Reproject to EPSG:4326
     dst_crs = "EPSG:4326"
@@ -287,6 +287,7 @@ def new_run():
             sim_time=sim_time,
             steady_state_tolerance=steady_state_tolerance,
             initial_tstep=initial_tstep,
+            _context=st.session_state["model"]._context,
         )
         st.session_state["model"].add_run(tmp_run)
         st.rerun()
@@ -483,6 +484,7 @@ def run_editor():
         st.button("New run", on_click=new_run)
         if st.button("Delete run"):
             del st.session_state["model"].runs[run_]
+            run_ = None
     if run_ is not None:
         r: HydraulicModelRun = st.session_state["model"].runs[run_]
         with st.container(border=True):
@@ -524,7 +526,7 @@ def run_executor():
         run_ = st.selectbox("Select a run", runs, index=0, key="rexec")
         exec_run = st.button("Execute run")
     if exec_run:
-        run_path = st.session_state["model"].runs[run_].par_path
+        run_path = str(st.session_state["model"].runs[run_].parfile_path)
         with st.spinner(f"Running Lisflood model at {run_path}"):
             run_model(run_path)
             st.rerun()

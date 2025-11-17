@@ -282,8 +282,10 @@ class ModelDomain:
     @classmethod
     def from_dict(cls, d: dict[str, Any]):
         if d["terrain"] is not None:
+            d["terrain"]["_context"] = d["_context"]
             d["terrain"] = Terrain(**d["terrain"])
         if d["roughness"] is not None:
+            d["roughness"]["_context"] = d["_context"]
             d["roughness"] = Roughness(**d["roughness"])
         d["transform"] = Affine(**d["transform"])
         return cls(**d)
@@ -436,6 +438,12 @@ class HydraulicModel:
             context = HydraulicModelContext(
                 Path(d["context"]["model_root"]), metadata.crs
             )
+            for i in d["domains"]:
+                d["domains"][i]["_context"] = context
+            for i in d["vectors"]:
+                d["vectors"][i]["_context"] = context
+            for i in d["runs"]:
+                d["runs"][i]["_context"] = context
         domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
         vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
         runs = {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
