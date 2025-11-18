@@ -1,0 +1,95 @@
+services:
+  # streamlit-app:
+    # image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/owp-2d-streamlit:latest
+    # build:
+    #   context: .
+    # container_name: streamlit-app
+    # user: "${UID}:${GID}"
+    # ports:
+    #   - "8501:8501"
+    # volumes:
+    #   - ./data:/data
+    #   - ./hydrofabric:/hydrofabric
+    # environment:
+    #   - MODEL_HOST=lisflood-runner
+    #   - MODEL_PORT=5000
+    #   - MODEL_DIR=/data
+    #   - HYDROFABRIC_DIR=/hydrofabric
+    # depends_on:
+    #   - lisflood-runner
+
+  lisflood-runner:
+    image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/lisflood-fp:latest-gpu
+    container_name: lisflood-runner
+    platform: linux/amd64
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./data:/data
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  api:
+    container_name: api
+    image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/papi
+    platform: linux/amd64
+    ports:
+      - '5050:5050'
+    env_file:
+      - .env
+    volumes:
+      # NOTE: do NOT mount the local ./api into /app in deploy (production) because
+      # it will override the image's /app contents. The image provides the built
+      # binary at /app/main; mounting hides it and leads to "no such file or directory".
+      # - ./api:/app
+      - ./.data/api:/.data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - process_api_net
+    depends_on:
+      minio:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  minio:
+    container_name: minio
+    image: minio/minio:RELEASE.2023-08-23T10-07-06Z.fips
+    command: server /data --console-address ":9001"
+    env_file:
+      - .env
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - ./.data/minio:/data
+    networks:
+      - process_api_net
+
+  postgres:
+    container_name: postgres
+    image: postgres:16.1-alpine3.18
+    env_file:
+      - .env
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+    networks:
+      - process_api_net
+
+networks:
+  process_api_net:
+    external: true
