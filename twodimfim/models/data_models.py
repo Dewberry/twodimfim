@@ -34,6 +34,7 @@ from twodimfim.utils.geospatial import (
     BBox,
     poly_to_edges,
     rasterize_line,
+    sample_raster,
     snap_bbox_to_grid,
 )
 
@@ -85,9 +86,7 @@ class VectorDataset:
     idx: str
     path_stem: str
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @cached_property
     def path(self) -> Path:
@@ -118,7 +117,7 @@ class VectorDataset:
 class BoundaryCondition:
     geometry_vector: str
     bc_type: BCType
-    value: float
+    value: float | str
 
 
 @dataclass
@@ -127,9 +126,7 @@ class Terrain:
     path_stem: str
     vertical_units: UnitsType
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @cached_property
     def path(self) -> Path:
@@ -145,7 +142,7 @@ class Terrain:
         rows: int,
         units: UnitsType = "meters",
         context: HydraulicModelContext = field(
-            default_factory=generate_generic_context, repr=False
+            default_factory=generate_generic_context
         ),
     ):
         idx = f"{domain_idx}_usgs_dem_{resolution}"
@@ -167,9 +164,7 @@ class Roughness:
     idx: str
     path_stem: str
     metadata: DatasetMetadata
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @cached_property
     def path(self) -> Path:
@@ -184,7 +179,7 @@ class Roughness:
         cols: int,
         rows: int,
         context: HydraulicModelContext = field(
-            default_factory=generate_generic_context, repr=False
+            default_factory=generate_generic_context
         ),
     ):
         idx = f"{domain_idx}_nlcd_roughness_{resolution}"
@@ -214,9 +209,7 @@ class HydraulicModelRun:
     run_dir_stem: str = DEFAULT_RUN_DIR
     parfile_name: str = PAR_FILE
     bcifile_name: str = BCI_FILE
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]):
@@ -237,6 +230,14 @@ class HydraulicModelRun:
     def bcifile_path(self) -> Path:
         return self.run_dir / self.bcifile_name
 
+    @property
+    def depth_grid_path(self) -> Path:
+        return self.run_dir / f"{self.idx}.max"
+
+    @property
+    def wse_grid_path(self) -> Path:
+        return self.run_dir / f"{self.idx}.mxe"
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         del d["_context"]
@@ -252,9 +253,7 @@ class ModelDomain:
     resolution: float
     terrain: Terrain | None = None
     roughness: Roughness | None = None
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     def __post_init__(self):
         if self.terrain is not None:
@@ -269,7 +268,7 @@ class ModelDomain:
         bbox: BBox,
         resolution: float,
         context: HydraulicModelContext = field(
-            default_factory=generate_generic_context, repr=False
+            default_factory=generate_generic_context
         ),
     ):
         bbox = snap_bbox_to_grid(bbox, resolution)
@@ -341,14 +340,12 @@ class ModelDomain:
             self._context,
         )
 
-    def geometry_to_bc_points(
-        self, geometry: BaseGeometry
-    ) -> list[tuple[str, float, float]]:
+    def geometry_to_bc_points(self, geometry: BaseGeometry) -> list[list[str | float]]:
         if isinstance(geometry, Point):
-            return [("P", geometry.x, geometry.y)]
+            return [["P", geometry.x, geometry.y]]
         elif isinstance(geometry, LineString):
             pts = rasterize_line(geometry, self.rows, self.cols, self.transform)
-            return [("P", i[0], i[1]) for i in pts]
+            return [["P", i[0], i[1]] for i in pts]
         elif isinstance(geometry, Polygon):
             return poly_to_edges(geometry, self.bbox)
         else:
@@ -364,14 +361,27 @@ class ModelDomain:
 
 
 @dataclass
+class ModelConnection:
+    idx: str
+    model_path: Path
+    run_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "idx": self.idx,
+            "model_path": str(self.model_path),
+            "run_id": self.run_id,
+        }
+
+
+@dataclass
 class HydraulicModel:
     metadata: HydraulicModelMetadata
     domains: dict[str, ModelDomain] = field(default_factory=dict)
     vectors: dict[str, VectorDataset] = field(default_factory=dict)
     runs: dict[str, HydraulicModelRun] = field(default_factory=dict)
-    _context: HydraulicModelContext = field(
-        default_factory=generate_generic_context, repr=False
-    )
+    connections: dict[str, ModelConnection] = field(default_factory=dict)
+    _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     def __post_init__(self):
         for i in [*self.domains.values(), *self.vectors.values(), *self.runs.values()]:
@@ -407,7 +417,7 @@ class HydraulicModel:
         vector_dir = context.model_root / DEFAULT_VECTOR_DIR
         reach_context = ReachContext(vpu, reach_id)
         _vectors = reach_context.export_default_domain(
-            vector_dir, walk_us_dist_pct, inflow_width
+            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer
         )
         std_meta = DatasetMetadata("file", reach_context.gpkg_path)
         vectors = {}
@@ -447,7 +457,8 @@ class HydraulicModel:
         domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
         vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
         runs = {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
-        return cls(metadata, domains, vectors, runs, context)
+        connections = {k: ModelConnection(**v) for k, v in d["connections"].items()}
+        return cls(metadata, domains, vectors, runs, connections, _context=context)
 
     @classmethod
     def from_file(cls, in_path: str | Path):
@@ -462,6 +473,7 @@ class HydraulicModel:
             "domains": {k: v.to_dict() for k, v in self.domains.items()},
             "vectors": {k: v.to_dict() for k, v in self.vectors.items()},
             "runs": {k: v.to_dict() for k, v in self.runs.items()},
+            "connections": {k: v.to_dict() for k, v in self.connections.items()},
         }
 
     def to_file(self, out_path: str | Path) -> None:
@@ -478,7 +490,8 @@ class HydraulicModel:
         domain = self.domains[run.domain]
         domain.check_files()
         run.run_dir.mkdir(exist_ok=True, parents=True)
-        write_bci_file(run, domain, self.vectors)
+        pts = self._process_bc_lines(run.boundary_conditions, domain)
+        write_bci_file(run.bcifile_path, pts)
         write_par_file(run, domain)
 
     def add_run(self, run: HydraulicModelRun | dict[str, Any]) -> None:
@@ -487,5 +500,38 @@ class HydraulicModel:
         self.write_run(run)
         self.runs[run.idx] = run
 
-    def execute_run(self, run: str) -> None:
-        pass
+    def add_connection(self, idx: str, model_path: str | Path, run_id: str) -> None:
+        cnx = ModelConnection(idx, Path(model_path), run_id)
+        self.connections[idx] = cnx
+
+    def _process_bc_lines(
+        self, bcs: list[BoundaryCondition], domain: ModelDomain
+    ) -> list[list[str | float]]:
+        all_pts = []
+        for i in bcs:
+            all_pts.extend(self._process_bc_line(i, domain))
+        return all_pts
+
+    def _process_bc_line(
+        self, bc: BoundaryCondition, domain: ModelDomain
+    ) -> list[list[str | float]]:
+        line = self.vectors[bc.geometry_vector]
+        pts = domain.geometry_to_bc_points(line.shape)
+        if bc.bc_type == "QFIX":
+            q_tmp = float(bc.value) / (domain.resolution * len(pts))
+            pts = [[*i, "QFIX", q_tmp] for i in pts]
+        elif bc.bc_type == "TRANSFER":
+            pts = self._get_transfer_wses(pts, str(bc.value))
+        else:
+            pts = [[*i, bc.bc_type, bc.value] for i in pts]
+        return pts
+
+    def _get_transfer_wses(
+        self, pts: list[list[str | float]], idx: str
+    ) -> list[list[str | float]]:
+        connection = self.connections[idx]
+        tmp_model = HydraulicModel.from_file(connection.model_path)
+        tmp_run = tmp_model.runs[connection.run_id]
+        coords = [(float(i[1]), float(i[2])) for i in pts]
+        vals = sample_raster(tmp_run.wse_grid_path, coords)
+        return [[*i, "HFIX", v] for i, v in zip(pts, vals)]

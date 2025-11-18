@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
-from shapely import LineString, Polygon
+from shapely import LineString, Polygon, box, clip_by_rect, unary_union
 from shapely.geometry.base import BaseGeometry
 
 from twodimfim.consts import (
@@ -17,6 +17,7 @@ from twodimfim.consts import (
     STREAM_LAYER,
 )
 from twodimfim.utils.geospatial import (
+    BBox,
     perpendicular_line,
 )
 from twodimfim.utils.network import NetworkWalker
@@ -132,19 +133,38 @@ class ReachContext:
         us_bc_pt = self.us_ms_centerline.interpolate(1 - walk_us_dist)
         return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
 
+    def make_transfer_line(self, bbox: BBox) -> LineString:
+        geom = clip_by_rect(
+            self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
+        )
+        return cast(LineString, geom)
+
     def export_default_domain(
         self,
         export_dir: str | Path,
         walk_us_dist_pct: float = 0.25,
         inflow_width: float = 10,
+        buffer: float = 100,
     ) -> dict[str, str]:
         # Export standard elements
         out_dict = self.export_to_dir(export_dir)
 
         # Export additional elements
-        geom = self.make_us_bc_line(walk_us_dist_pct, inflow_width)
+        us_bc = self.make_us_bc_line(walk_us_dist_pct, inflow_width)
         out_path = Path(export_dir) / "us_bc_line.parquet"
-        self.export_shape(geom, out_path)
+        self.export_shape(us_bc, out_path)
         out_dict["us_bc_line"] = str(out_path)
+
+        bbox = BBox(*unary_union([self.divide, us_bc]).bounds)
+        bbox.buffer(buffer)
+        bbox_shape = box(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)
+        out_path = Path(export_dir) / "bbox.parquet"
+        self.export_shape(bbox_shape, out_path)
+        out_dict["bbox"] = str(out_path)
+
+        transfer_line = self.make_transfer_line(bbox)
+        out_path = Path(export_dir) / "transfer.parquet"
+        self.export_shape(transfer_line, out_path)
+        out_dict["transfer"] = str(out_path)
 
         return out_dict

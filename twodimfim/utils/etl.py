@@ -55,7 +55,7 @@ def get_nlcd_mannings(
     )
 
     # Download data
-    r = requests.get(url)
+    r = requests.get(url, verify=False)
     with MemoryFile(r.content) as memfile:
         with memfile.open() as src:
             out_meta = src.meta

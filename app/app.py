@@ -1,4 +1,5 @@
 import os
+from gc import disable
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ from twodimfim.models.data_models import (
     HydraulicModel,
     HydraulicModelMetadata,
     HydraulicModelRun,
+    ModelConnection,
     ModelDomain,
     VectorDataset,
 )
@@ -47,27 +49,30 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
             }
         )
     else:
-        geoms = []
+        geoms_ = []
         types = []
         values = []
         for i in defaults:
-            geoms.append(i["geometry_vector"])
+            geoms_.append(i["geometry_vector"])
             types.append(i["bc_type"])
             values.append(i["value"])
         bc = pd.DataFrame(
             {
-                "Geometry": geoms,
+                "Geometry": geoms_,
                 "Type": types,
                 "Value": values,
             }
         )
     bc["Geometry"] = bc["Geometry"].astype(str)
     bc["Type"] = bc["Type"].astype(str)
+    bc["Value"] = bc["Value"].astype(str)
     geoms = st.session_state["model"].vectors.keys()
     ccfg = {
         "Geometry": st.column_config.SelectboxColumn(options=geoms),
-        "Type": st.column_config.SelectboxColumn(options=["QFIX", "HFIX", "FREE"]),
-        "Value": st.column_config.NumberColumn(),
+        "Type": st.column_config.SelectboxColumn(
+            options=["QFIX", "HFIX", "FREE", "TRANSFER"]
+        ),
+        "Value": st.column_config.TextColumn(),
     }
     st.text("Boundary Conditions")
     if editable:
@@ -228,6 +233,7 @@ def make_new_model(vpu, reach_id, resolution, inflow_width):
     st.session_state["model"] = HydraulicModel.from_hydrofabric(
         vpu, reach_id, resolution, model_root, inflow_width=inflow_width
     )
+    st.session_state["model"].save()
 
 
 @st.dialog("Create a new model")
@@ -336,6 +342,29 @@ def add_vector():
         )
         geom = VectorDataset(idx, stem, meta, st.session_state["model"]._context)
         st.session_state["model"].vectors[idx] = geom
+
+
+@st.dialog("Create a connection")
+def new_connection():
+    idx = st.text_input("Connection ID")
+    all_models = [
+        str(i.name)
+        for i in Path(DATA_DIR).iterdir()
+        if i.is_dir() and (i / "model.json").exists()
+    ]
+    path = st.selectbox("Saved models", options=all_models)
+    if path is not None:
+        model_path = Path(DATA_DIR) / path / "model.json"
+        tmp_model = HydraulicModel.from_file(model_path)
+        run_opts = tmp_model.runs.keys()
+        disable = False
+    else:
+        run_opts = []
+        disable = True
+    run_id = st.selectbox("Model runs", options=run_opts, disabled=disable)
+    if st.button("Create connection", disabled=run_id is None):
+        st.session_state["model"].add_connection(idx, model_path, run_id)
+        st.rerun()
 
 
 def save_model():
@@ -477,6 +506,18 @@ def domain_editor():
                         st.rerun()
 
 
+def connection_editor():
+    cnx = st.session_state["model"].connections.keys()
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        cnx_ = st.selectbox("Select a connection", cnx, index=0, key="cedit")
+        st.button("New connection", on_click=new_connection)
+        if st.button("Delete connection"):
+            del st.session_state["model"].connections[cnx_]
+            cnx_ = None
+    if cnx_ is not None:
+        st.text(f"{cnx_}")
+
+
 def run_editor():
     runs = st.session_state["model"].runs.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
@@ -544,11 +585,12 @@ def run_model(run_path):
 
 
 def model_editor():
-    t1, t2, t3, t4, t5 = st.tabs(
+    t1, t2, t3, t4, t5, t6 = st.tabs(
         [
             "Model Summary",
             "Geometry Editor",
             "Domain Editor",
+            "Connection Editor",
             "Run Editor",
             "Run Executor",
         ]
@@ -560,8 +602,10 @@ def model_editor():
     with t3:
         domain_editor()
     with t4:
-        run_editor()
+        connection_editor()
     with t5:
+        run_editor()
+    with t6:
         run_executor()
 
 

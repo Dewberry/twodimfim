@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -8,30 +9,25 @@ if TYPE_CHECKING:
     )
 
 
-def write_bci_file(
-    run: "HydraulicModelRun", domain: "ModelDomain", vectors: dict[str, "VectorDataset"]
-) -> None:
-    bc_lines = []
-    for i in run.boundary_conditions:
-        row_pts = domain.geometry_to_bc_points(vectors[i.geometry_vector].shape)
-        if i.bc_type == "QFIX":
-            tmp_val = i.value / (domain.resolution * len(row_pts))
+def write_bci_file(bci_path: str | Path, pts: list[list[str | float]]) -> None:
+    # Clean points
+    pts_clean = []
+    for i in pts:
+        i[0] = str(i[0])
+        i[1] = str(round(float(i[1]), 4))
+        i[2] = str(round(float(i[2]), 4))
+        i[3] = str(i[3])
+        i[4] = str(i[4])
+        if len(i) < 6:
+            i.append("\n")
         else:
-            tmp_val = i.value
-        for j in row_pts:
-            bc = " ".join(
-                [
-                    j[0],
-                    str(round(j[1], 4)),
-                    str(round(j[2], 4)),
-                    i.bc_type,
-                    str(tmp_val),
-                    "\n",
-                ]
-            )
-            bc_lines.append(bc)
-        with open(run.bcifile_path, mode="w+") as f:
-            f.writelines(bc_lines)
+            i[5] = "\n"
+        pts_clean.append(i[:6])
+
+    # Format lines and write
+    bc_lines = [" ".join(i) for i in pts_clean]
+    with open(bci_path, mode="w+") as f:
+        f.writelines(bc_lines)
 
 
 def write_par_file(run: "HydraulicModelRun", domain: "ModelDomain") -> None:

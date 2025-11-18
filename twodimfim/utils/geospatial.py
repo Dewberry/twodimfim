@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
 from math import ceil, floor
+from pathlib import Path
 from typing import Iterator
 
 import numpy as np
@@ -102,7 +103,7 @@ def rasterize_line(
     return list(zip(xs, ys))
 
 
-def poly_to_edges(poly: Polygon, bbox: BBox) -> list[tuple[str, float, float]]:
+def poly_to_edges(poly: Polygon, bbox: BBox) -> list[list[str | float]]:
     """For each line (NSEW) of the bbox perimeter, clip to poly, the report end coords."""
     # Create perimeter lines
     bottom_line = LineString([(bbox.xmin, bbox.ymin), (bbox.xmax, bbox.ymin)])
@@ -119,12 +120,27 @@ def poly_to_edges(poly: Polygon, bbox: BBox) -> list[tuple[str, float, float]]:
     # Export
     out_list = []
     if not top_clipped.is_empty:
-        out_list.append(("N", top_clipped.bounds[0], top_clipped.bounds[2]))
+        out_list.append(["N", top_clipped.bounds[0], top_clipped.bounds[2]])
     if not bottom_clipped.is_empty:
-        out_list.append(("S", bottom_clipped.bounds[0], bottom_clipped.bounds[2]))
+        out_list.append(["S", bottom_clipped.bounds[0], bottom_clipped.bounds[2]])
     if not left_clipped.is_empty:
-        out_list.append(("W", left_clipped.bounds[1], left_clipped.bounds[3]))
+        out_list.append(["W", left_clipped.bounds[1], left_clipped.bounds[3]])
     if not right_clipped.is_empty:
-        out_list.append(("E", right_clipped.bounds[1], right_clipped.bounds[3]))
+        out_list.append(["E", right_clipped.bounds[1], right_clipped.bounds[3]])
 
     return out_list
+
+
+def sample_raster(
+    raster_path: str | Path, points: list[tuple[float, float]]
+) -> list[float]:
+    with rasterio.open(raster_path) as src:
+        arr = src.read(1)
+        transform = src.transform
+
+    inv = ~transform
+    x_ind, y_ind = zip(*[inv * (x, y) for x, y in points])
+    x_ind = np.floor(x_ind).astype(int)
+    y_ind = np.floor(y_ind).astype(int)
+
+    return list(arr[y_ind, x_ind])

@@ -4,7 +4,7 @@ from typing import Literal
 
 ### CUSTOM TYPES ###
 
-BCType = Literal["QFIX", "HFIX", "FREE"]
+BCType = Literal["QFIX", "HFIX", "FREE", "TRANSFER"]
 UnitsType = Literal["feet", "meters"]
 RunType = Literal["unsteady", "quasi-steady"]
 SupportedModels = Literal["LISFLOOD-FP", "SFINCS", "TRITON"]
