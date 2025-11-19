@@ -1,0 +1,14 @@
+name: Manual Dependabot Runner
+on:
+  workflow_dispatch:
+
+jobs:
+  run-dependabot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: github/dependabot-action@v2
+        with:
+          config-file: .github/dependabot.yml
