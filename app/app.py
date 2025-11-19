@@ -474,24 +474,13 @@ def model_summary_panel():
 
 
 def geometry_editor():
-    if st.button("Add vector", type="primary", use_container_width=True):
-        add_vector()
-    to_delete = []
-    for i in st.session_state["model"].vectors:
-        with st.container(border=True):
-            c1, c2 = st.columns(2, vertical_alignment="center")
-            with c1:
-                with st.container(horizontal_alignment="left"):
-                    st.markdown(i)
-            with c2:
-                with st.container(horizontal_alignment="right"):
-                    if st.button("", icon=":material/close:", key=f"close_{i}"):
-                        to_delete.append(i)
-
-    for i in to_delete:
-        del st.session_state["model"].vectors[i]
-    if len(to_delete) > 0:
-        st.rerun()
+    geoms = st.session_state["model"].vectors.keys()
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        geom_ = st.selectbox("Select a geometry", geoms, index=0)
+        st.button("New geometry", on_click=add_vector)
+        if st.button("Delete geometry"):
+            del st.session_state["model"].vectors[geom_]
+            st.rerun()
 
 
 def domain_editor():
