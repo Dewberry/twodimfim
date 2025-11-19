@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 from gc import disable
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from twodimfim.utils.etl import DatasetMetadata
 from twodimfim.utils.geospatial import BBox
 
 DATA_DIR = os.getenv("MODEL_DIR", "/data")
+REMOTE_DATA_DIR = os.getenv("REMOTE_DATA_DIR", "/remote/data")
 MODEL_HOST = os.getenv("MODEL_HOST", "lisflood-model")
 MODEL_PORT = os.getenv("MODEL_PORT", "5000")
 BASE_URL = f"http://{MODEL_HOST}:{MODEL_PORT}"
@@ -384,6 +386,42 @@ def save_model():
         st.session_state["model"].save()
 
 
+def rsync(src: str, dst: str):
+    cmd = ["rsync", "-a", "--mkpath", src, dst]
+    print(cmd)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 23:
+        st.toast(f"remote path {src} does not exist")
+    elif result.returncode != 0:
+        print(result.returncode)
+        print(result.stdout)
+        print(result.stderr)
+    return result.returncode
+
+
+def push_to_remote():
+    root = st.session_state["model"]._context.model_root.resolve()
+    src = str(root) + "/"
+    dst = str(Path(REMOTE_DATA_DIR) / root.relative_to(Path(DATA_DIR))) + "/"
+    rcode = rsync(src, dst)
+    if rcode == 0:
+        st.toast(f"Succesfully pushed data")
+
+
+def pull_from_Remote():
+    root = st.session_state["model"]._context.model_root.resolve()
+    dst = str(root) + "/"
+    src = str(Path(REMOTE_DATA_DIR) / root.relative_to(Path(DATA_DIR))) + "/"
+    rcode = rsync(src, dst)
+    if rcode == 0:
+        st.toast(f"Succesfully pulled data")
+    new_mod = root / "model.json"
+    if new_mod.exists():
+        st.session_state["model"] = HydraulicModel.from_file(new_mod)
+    else:
+        st.session_state["model"] = None
+
+
 def model_control():
     with st.container(width=550, vertical_alignment="bottom") as c:
         c1, c2, c3, c4 = st.columns(4, gap="small")
@@ -636,14 +674,31 @@ def model_editor():
 
 def editor_tab():
     with st.container(border=True, gap=None):
-        st.markdown("# Model Editor")
+        c1, c2 = st.columns([1, 2], vertical_alignment="top")
+        with c1:
+            st.markdown("# Model Editor")
+        with c2:
+            with st.container(vertical_alignment="top", horizontal_alignment="right"):
+                with st.popover("Sync with cloud"):
+                    with st.container(horizontal=True):
+                        st.button(
+                            "Pull from cloud",
+                            type="primary",
+                            disabled=st.session_state["model"] is None,
+                            on_click=pull_from_Remote,
+                        )
+                        st.button(
+                            "Push to cloud",
+                            type="primary",
+                            disabled=st.session_state["model"] is None,
+                            on_click=push_to_remote,
+                        )
         c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
         with c1:
             if st.session_state["model"] is None:
                 model_name = "None selected"
             else:
                 model_name = st.session_state["model"].metadata.title
-
             st.markdown(f"**Currently editing:** {model_name}")
         with c2:
             model_control()

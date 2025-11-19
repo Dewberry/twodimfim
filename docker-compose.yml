@@ -13,6 +13,7 @@ services:
       - MODEL_PORT=5000
       - MODEL_DIR=/data
       - HYDROFABRIC_DIR=/hydrofabric
+      - REMOTE_DATA_DIR=/mnt/a/data
     depends_on:
       - lisflood-runner
 
