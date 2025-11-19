@@ -1,5 +1,10 @@
 FROM mambaorg/micromamba
 
+# Install basic dependencies
+RUN apt-get update && \
+    apt-get install -y \
+    rsync
+
 # Set working directory
 WORKDIR /app
 
@@ -12,7 +17,6 @@ RUN micromamba run -n app pip install -e . && \
 
 # Copy app
 COPY app/ app/
-
 
 # Expose Streamlit default port
 EXPOSE 8501
