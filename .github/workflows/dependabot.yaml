@@ -1,5 +1,6 @@
 name: Manual Dependabot Runner
 on:
+  pull_request:
   workflow_dispatch:
 
 jobs:
