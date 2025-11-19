@@ -16,6 +16,7 @@ from twodimfim.consts import (
     STREAM_ID_PREFIX,
     STREAM_LAYER,
 )
+from twodimfim.errors import MissingReachError
 from twodimfim.utils.geospatial import (
     BBox,
     perpendicular_line,
@@ -24,7 +25,7 @@ from twodimfim.utils.network import NetworkWalker
 
 
 class ReachContext:
-    def __init__(self, vpu: int, reach_id: int, us_ds_walk_dist_km: float = 10) -> None:
+    def __init__(self, vpu: str, reach_id: int, us_ds_walk_dist_km: float = 10) -> None:
         self.vpu = vpu
         self.reach_id = reach_id
         self.us_ds_walk_dist_km = us_ds_walk_dist_km
@@ -32,13 +33,21 @@ class ReachContext:
         self.divide_id = DIVIDE_ID_PREFIX + str(reach_id)
         self.crs = COMMON_CRS
         self.gpkg_path = HYDROFABRIC_BASE_URI.format(vpu=str(vpu).rjust(2, "0"))
+        self.get_divide(self.divide_id)
 
     def get_divide(self, divide_id: str) -> Polygon:
-        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} = '{divide_id}'"
-        geom = (
-            gpd.read_file(self.gpkg_path, sql=query).to_crs(self.crs).geometry.iloc[0]
-        )
-        return cast(Polygon, geom)
+        try:
+            query = (
+                f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} = '{divide_id}'"
+            )
+            geom = (
+                gpd.read_file(self.gpkg_path, sql=query)
+                .to_crs(self.crs)
+                .geometry.iloc[0]
+            )
+            return cast(Polygon, geom)
+        except IndexError:
+            raise MissingReachError(f"Could not find a reach with ID {divide_id}")
 
     def get_centerline(self, stream_id: str) -> LineString:
         query = f"SELECT * FROM {STREAM_LAYER} WHERE {STREAM_ID_COL} = '{stream_id}'"
