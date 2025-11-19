@@ -1,4 +1,5 @@
 import os
+import shutil
 from gc import disable
 from pathlib import Path
 
@@ -238,12 +239,23 @@ def make_new_model(vpu, reach_id, resolution, inflow_width):
 
 @st.dialog("Create a new model")
 def new_model():
-    vpu = st.number_input(label="Vector Processing Unit (VPU)", value=1)
+    vpu = st.text_input(label="Vector Processing Unit (VPU)", value="1")
     reach_id = st.number_input(label="Reach ID", step=1)
     resolution = st.number_input(label="Model Resolution (m)", value=10)
     inflow_width = st.number_input(label="Inflow Width (m)", value=100)
     if st.button("Create Model"):
         make_new_model(vpu, reach_id, resolution, inflow_width)
+        st.rerun()
+
+
+@st.dialog("Delete model")
+def delete_model():
+    st.markdown(
+        f"Are you sure that you want to delete model {st.session_state['model'].metadata.title}?"
+    )
+    if st.button("Delete model"):
+        shutil.rmtree(st.session_state["model"]._context.model_root)
+        st.session_state["model"] = None
         st.rerun()
 
 
@@ -373,11 +385,24 @@ def save_model():
 
 
 def model_control():
-    with st.container(width=400, vertical_alignment="bottom") as c:
-        c1, c2, c3 = st.columns(3, gap="small")
+    with st.container(width=550, vertical_alignment="bottom") as c:
+        c1, c2, c3, c4 = st.columns(4, gap="small")
         c1.button("New Model", width=125, on_click=new_model, type="primary")
         c2.button("Load Model", width=125, on_click=load_model, type="primary")
-        c3.button("Save Model", width=125, on_click=save_model, type="primary")
+        c3.button(
+            "Save Model",
+            width=125,
+            on_click=save_model,
+            type="primary",
+            disabled=st.session_state["model"] is None,
+        )
+        c4.button(
+            "Delete Model",
+            width=125,
+            on_click=delete_model,
+            type="primary",
+            disabled=st.session_state["model"] is None,
+        )
 
 
 def model_summary_panel():
@@ -611,9 +636,15 @@ def model_editor():
 
 def editor_tab():
     with st.container(border=True, gap=None):
-        c1, c2 = st.columns(2, vertical_alignment="bottom")
+        st.markdown("# Model Editor")
+        c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
         with c1:
-            st.markdown("# Model Editor")
+            if st.session_state["model"] is None:
+                model_name = "None selected"
+            else:
+                model_name = st.session_state["model"].metadata.title
+
+            st.markdown(f"**Currently editing:** {model_name}")
         with c2:
             model_control()
         st.markdown(MARKDOWN_DIVIDER, unsafe_allow_html=True)

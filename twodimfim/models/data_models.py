@@ -399,7 +399,7 @@ class HydraulicModel:
     @classmethod
     def from_hydrofabric(
         cls,
-        vpu: int,
+        vpu: str,
         reach_id: int,
         resolution: float,
         model_root: str | Path,
@@ -435,7 +435,10 @@ class HydraulicModel:
         domains = {idx: ModelDomain.from_bbox(idx, base_bbox, resolution, context)}
 
         # Make metadata
-        metadata["title"] = f"hydrofabric_{vpu}_{reach_id}"
+        metadata["title"] = str(reach_id)
+        metadata["engineer_notes"] = (
+            f"Initialized from hydrofabric. VPU: {vpu}. Flowpath ID: {reach_id}"
+        )
         meta = HydraulicModelMetadata(**metadata)
 
         # Make model
