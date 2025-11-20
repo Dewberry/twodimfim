@@ -388,7 +388,7 @@ def save_model():
 
 def rsync(src: str, dst: str):
     cmd = ["rsync", "-a", "--mkpath", src, dst]
-    print(cmd)
+    st.toast(f"Copying {src} to {dst}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 23:
         st.toast(f"remote path {src} does not exist")
