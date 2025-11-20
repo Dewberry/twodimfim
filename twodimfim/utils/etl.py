@@ -7,6 +7,7 @@ from typing import Any, Literal
 import numpy as np
 import rasterio
 import requests
+from owslib.util import Authentication
 from owslib.wms import WebMapService
 from rasterio import mask
 from rasterio.io import MemoryFile
@@ -42,8 +43,9 @@ def get_nlcd_mannings(
     out_path: str | Path, bbox: BBox, cols: int, rows: int, crs: str = COMMON_CRS
 ) -> DatasetMetadata:
     # Get download URL
+    auth = Authentication(verify=False)
     url = (
-        WebMapService(NLCD_WMS_URL)
+        WebMapService(NLCD_WMS_URL, auth=auth)
         .getmap(
             layers=["NLCD_2021_Land_Cover_L48"],
             srs=crs,
