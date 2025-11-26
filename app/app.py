@@ -234,7 +234,7 @@ def map_tab():
 def make_new_model(vpu, reach_id, resolution, inflow_width):
     model_root = Path(DATA_DIR) / str(reach_id)
     st.session_state["model"] = HydraulicModel.from_hydrofabric(
-        vpu, reach_id, resolution, model_root, inflow_width=inflow_width
+        vpu, reach_id, resolution, model_root, inflow_width=inflow_width, vector_ftype="shp"
     )
     st.session_state["model"].save()
 

@@ -408,6 +408,7 @@ class HydraulicModel:
         domain_buffer: float = 100,
         crs: str = COMMON_CRS,
         metadata: dict = {},
+        vector_ftype: str = "parquet"
     ):
         # Initialize model directory
         context = HydraulicModelContext(Path(model_root), CRS.from_user_input(crs))
@@ -417,7 +418,7 @@ class HydraulicModel:
         vector_dir = context.model_root / DEFAULT_VECTOR_DIR
         reach_context = ReachContext(vpu, reach_id)
         _vectors = reach_context.export_default_domain(
-            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer
+            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer, vector_ftype
         )
         std_meta = DatasetMetadata("file", reach_context.gpkg_path)
         vectors = {}
