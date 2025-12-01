@@ -7,7 +7,7 @@ import geopandas as gpd
 import requests
 from pyproj import Transformer
 
-from app.consts import TITILER_URL
+from app.consts import TITILER_URL, TITILER_PORT
 
 
 class OverlayLayer:
@@ -91,7 +91,7 @@ class OverlayLayer:
     def to_overlay_dict(self):
         """Generate overlay dictionary for map configuration."""
         stats = self.statistics
-        base = f"{TITILER_URL}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
+        base = f"http://localhost:{TITILER_PORT}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
         url = f"{base}?url={quote(self.url, safe='')}&colormap_name={self.colormap}&rescale={stats['min']},{stats['max']}"
         return {
             "name": self.idx,
