@@ -1,48 +1,36 @@
-import os
 import shutil
-import subprocess
-from gc import disable
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import pydeck as pdk
-import rasterio
 import requests
 import streamlit as st
-from PIL import Image
 from pyproj import CRS
-from rasterio.warp import Resampling, calculate_default_transform, reproject
-from shapely import unary_union
+from shapely.ops import unary_union
 
+from app.consts import BASE_URL, DATA_DIR, MARKDOWN_DIVIDER
+from app.editor.functions import (
+    make_new_model,
+    pull_from_remote,
+    push_to_remote,
+    run_model,
+    save_model,
+)
 from twodimfim.models.data_models import (
     BoundaryCondition,
+    DatasetMetadata,
     HydraulicModel,
     HydraulicModelMetadata,
     HydraulicModelRun,
-    ModelConnection,
     ModelDomain,
     VectorDataset,
 )
-from twodimfim.utils.etl import DatasetMetadata
 from twodimfim.utils.geospatial import BBox
-
-DATA_DIR = os.getenv("MODEL_DIR", "/data")
-REMOTE_DATA_DIR = os.getenv("REMOTE_DATA_DIR", "/remote/data")
-MODEL_HOST = os.getenv("MODEL_HOST", "lisflood-model")
-MODEL_PORT = os.getenv("MODEL_PORT", "5000")
-BASE_URL = f"http://{MODEL_HOST}:{MODEL_PORT}"
-
-MARKDOWN_DIVIDER = """
-            <div style="width:100%; margin-top:10px; margin-bottom:30px; padding:0;">
-            <hr style="margin:0; padding:0; height:1px; border:none; background-color:#919191;">
-            </div>
-            """
 
 ### WIDGETS ###
 
 
 def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
+    """Specific data editor for boundary conditions."""
     if defaults is None:
         bc = pd.DataFrame(
             {
@@ -85,162 +73,12 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
     return st.data_editor(bc, num_rows=nr, column_config=ccfg)
 
 
-### MAP PANEL ###
-
-
-def make_raster_layer(raster_path):
-    raster_path = Path(raster_path)
-
-    # Open the raster
-    with rasterio.open(raster_path) as src:
-        data = src.read(1).astype("float32")
-        transform = src.transform
-        width, height = src.width, src.height
-    src_crs = st.session_state["model"]._context.crs
-
-    # Reproject to EPSG:4326
-    dst_crs = "EPSG:4326"
-    dst_transform, dst_width, dst_height = calculate_default_transform(
-        src_crs, dst_crs, width, height, *src.bounds
-    )
-    dst_data = np.zeros((dst_height, dst_width), dtype="float32")
-    reproject(
-        source=data,
-        destination=dst_data,
-        src_transform=transform,
-        src_crs=src_crs,
-        dst_transform=dst_transform,
-        dst_crs=dst_crs,
-        resampling=Resampling.bilinear,
-    )
-
-    # Normalize values to 0-1
-    min_val = np.nanmin(dst_data)
-    max_val = np.nanmax(dst_data)
-    if max_val > min_val:
-        norm = (dst_data - min_val) / (max_val - min_val)
-    else:
-        norm = np.zeros_like(dst_data)
-
-    # Define cyan -> dark blue gradient
-    nan_mask = norm == 0
-    r_channel = np.zeros_like(norm, dtype=np.uint8)
-    g_channel = ((1 - norm) * 255).astype(np.uint8)  # interpolate green
-    b_channel = np.ones_like(norm, dtype=np.uint8) * 255  # interpolate blue
-    alpha_channel = np.full_like(r_channel, 178, dtype=np.uint8)  # 70% opacity
-    alpha_channel[nan_mask] = 0
-
-    # Stack into RGBA and save PNG
-    img = np.stack([r_channel, g_channel, b_channel, alpha_channel], axis=2)
-    pil_img = Image.fromarray(img, mode="RGBA")
-    png_path = Path(raster_path).with_suffix(".png")
-    pil_img.save(png_path)
-
-    # Return BitmapLayer with WGS84 bounds
-    minx, miny = dst_transform * (0, dst_height)
-    maxx, maxy = dst_transform * (dst_width, 0)
-    return pdk.Layer(
-        "BitmapLayer",
-        image=str(png_path),
-        bounds=[minx, miny, maxx, maxy],
-        opacity=0.7,
-    )
-
-
-def map_tab():
-    if st.session_state["model"] is not None:
-        layers = []
-        if len(st.session_state["model"].runs) > 0:
-            run_ = next(iter(st.session_state["model"].runs))
-            run = st.session_state["model"].runs[run_]
-            raster_path = Path(run.run_dir) / f"{run_}.max"
-            if raster_path.exists():
-                layers.append(make_raster_layer(str(raster_path)))
-        for k in [
-            "all_us_divides",
-            "all_ds_divides",
-            "divide",
-            "us_bc_line",
-            "centerline",
-        ]:
-            if not k in st.session_state["model"].vectors:
-                continue
-            gdf = st.session_state["model"].vectors[k].gdf
-            gdf["feature"] = k
-            gdf = gdf.to_crs("EPSG:4326")
-
-            if k == "all_us_divides" or k == "all_ds_divides":
-                lc = [0, 0, 0]
-                fc = [0, 0, 0, 0.25]
-                lw = 12
-            elif k == "divide":
-                lc = [255, 0, 0]
-                fc = [0, 0, 0, 0.0]
-                lw = 30
-            elif k == "centerline":
-                lc = [0, 0, 255]
-                fc = [0, 0, 0, 0.0]
-                lw = 30
-            elif k == "us_bc_line":
-                lc = [255, 153, 0]
-                fc = [0, 0, 0, 0.0]
-                lw = 30
-            else:
-                continue
-
-            geojson = gdf.__geo_interface__
-            layer = pdk.Layer(
-                "GeoJsonLayer",
-                id=k,
-                data=geojson,
-                stroked=True,
-                filled=True,
-                get_line_color=lc,
-                get_fill_color=fc,
-                get_line_width=lw,
-                pickable=True,
-                auto_highlight=True,
-                highlight_color=[0, 0, 0, 100],
-            )
-
-            layers.append(layer)
-
-        # Build the deck
-        bounds = (
-            st.session_state["model"]
-            .vectors["centerline"]
-            .gdf.to_crs("EPSG:4326")
-            .total_bounds
-        )
-        lon_center = (bounds[0] + bounds[2]) / 2
-        lat_center = (bounds[1] + bounds[3]) / 2
-        view_state = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=12)
-        tooltip = {"html": "<b>{feature}</b>", "style": {"color": "white"}}
-        r = pdk.Deck(
-            layers=layers,
-            initial_view_state=view_state,
-            tooltip=tooltip,
-            map_style="mapbox://styles/mapbox/light-v9",
-        )
-        st.pydeck_chart(r)
-
-    else:
-        st.pydeck_chart()
-
-
-### MODEL EDITOR PANEL ###
-
-
-def make_new_model(vpu, reach_id, resolution, inflow_width):
-    model_root = Path(DATA_DIR) / str(reach_id)
-    st.session_state["model"] = HydraulicModel.from_hydrofabric(
-        vpu, reach_id, resolution, model_root, inflow_width=inflow_width, vector_ftype="shp"
-    )
-    st.session_state["model"].save()
+### POP-UP DIALOGS ###
 
 
 @st.dialog("Create a new model")
 def new_model():
+    """Create a new HydraulicModel and store it in session state."""
     vpu = st.text_input(label="Vector Processing Unit (VPU)", value="1")
     reach_id = st.number_input(label="Reach ID", step=1)
     resolution = st.number_input(label="Model Resolution (m)", value=10)
@@ -252,6 +90,7 @@ def new_model():
 
 @st.dialog("Delete model")
 def delete_model():
+    """Delete the current model from disk and session state."""
     st.markdown(
         f"Are you sure that you want to delete model {st.session_state['model'].metadata.title}?"
     )
@@ -263,6 +102,7 @@ def delete_model():
 
 @st.dialog("Load a model")
 def load_model():
+    """Load a HydraulicModel from disk into session state."""
     all_models = [
         str(i.name)
         for i in Path(DATA_DIR).iterdir()
@@ -278,6 +118,7 @@ def load_model():
 
 @st.dialog("Create a new run")
 def new_run():
+    """Create a new HydraulicModelRun and add it to the current model."""
     idx = st.text_input("Run ID")
     types_ = ["Unsteady", "Quasi-steady"]
     type_ = st.selectbox("Run Type", options=types_)
@@ -315,6 +156,7 @@ def new_run():
 
 @st.dialog("Create a new domain")
 def new_domain(cur_domain: str = ""):
+    """Create a new ModelDomain and add it to the current model."""
     st.markdown("Create a domain from the bounding box of selected geometries.")
     idx = st.text_input("Domain ID", value=cur_domain)
     if cur_domain in st.session_state["model"].domains:
@@ -338,6 +180,7 @@ def new_domain(cur_domain: str = ""):
 
 @st.dialog("Create a vector layer")
 def add_vector():
+    """Add a new VectorDataset to the current model."""
     vector_dir = next(iter(st.session_state["model"].vectors.values())).path.parent
     existing_paths = set([i.path for i in st.session_state["model"].vectors.values()])
     vector_files = list(set(vector_dir.iterdir()).difference(existing_paths))
@@ -360,6 +203,7 @@ def add_vector():
 
 @st.dialog("Create a connection")
 def new_connection():
+    """Create a connection to another HydraulicModelRun."""
     idx = st.text_input("Connection ID")
     all_models = [
         str(i.name)
@@ -381,48 +225,11 @@ def new_connection():
         st.rerun()
 
 
-def save_model():
-    if st.session_state["model"] is not None:
-        st.session_state["model"].save()
-
-
-def rsync(src: str, dst: str):
-    cmd = ["rsync", "-a", "--mkpath", src, dst]
-    st.toast(f"Copying {src} to {dst}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 23:
-        st.toast(f"remote path {src} does not exist")
-    elif result.returncode != 0:
-        print(result.returncode)
-        print(result.stdout)
-        print(result.stderr)
-    return result.returncode
-
-
-def push_to_remote():
-    root = st.session_state["model"]._context.model_root.resolve()
-    src = str(root) + "/"
-    dst = str(Path(REMOTE_DATA_DIR) / root.relative_to(Path(DATA_DIR))) + "/"
-    rcode = rsync(src, dst)
-    if rcode == 0:
-        st.toast(f"Succesfully pushed data")
-
-
-def pull_from_Remote():
-    root = st.session_state["model"]._context.model_root.resolve()
-    dst = str(root) + "/"
-    src = str(Path(REMOTE_DATA_DIR) / root.relative_to(Path(DATA_DIR))) + "/"
-    rcode = rsync(src, dst)
-    if rcode == 0:
-        st.toast(f"Succesfully pulled data")
-    new_mod = root / "model.json"
-    if new_mod.exists():
-        st.session_state["model"] = HydraulicModel.from_file(new_mod)
-    else:
-        st.session_state["model"] = None
+### DEFAULT DIALOGS ###
 
 
 def model_control():
+    """Panel for creating, loading, saving, and deleting models."""
     with st.container(width=550, vertical_alignment="bottom") as c:
         c1, c2, c3, c4 = st.columns(4, gap="small")
         c1.button("New Model", width=125, on_click=new_model, type="primary")
@@ -444,6 +251,7 @@ def model_control():
 
 
 def model_summary_panel():
+    """Panel for viewing and editing model metadata."""
     meta: HydraulicModelMetadata = st.session_state["model"].metadata
     c1, c2 = st.columns(2)
     with c1:
@@ -474,6 +282,7 @@ def model_summary_panel():
 
 
 def geometry_editor():
+    """Dialog for creating and editing model geometries."""
     geoms = st.session_state["model"].vectors.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         geom_ = st.selectbox("Select a geometry", geoms, index=0)
@@ -484,6 +293,8 @@ def geometry_editor():
 
 
 def domain_editor():
+    """Dialog for creating and editing model domains."""
+    # Domain selection
     domains = st.session_state["model"].domains.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         domain_ = st.selectbox("Select a domain", domains, index=0)
@@ -491,7 +302,10 @@ def domain_editor():
         if st.button("Delete domain"):
             del st.session_state["model"].domains[domain_]
             st.rerun()
+
+    # Edit dialog
     if domain_ is not None:
+        # Information and update
         domain = st.session_state["model"].domains[domain_]
         with st.container(border=True):
             c1, c2 = st.columns(2)
@@ -508,6 +322,8 @@ def domain_editor():
                 st.markdown(text)
                 if st.button("Update domain"):
                     new_domain(domain_)
+
+        # Terrain and roughness
         with st.container(border=True):
             has_terrain = domain.terrain is not None
             c1, c2 = st.columns(2, vertical_alignment="bottom")
@@ -559,6 +375,8 @@ def domain_editor():
 
 
 def connection_editor():
+    """Dialog for creating and editing model connections."""
+    # Connection selection
     cnx = st.session_state["model"].connections.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         cnx_ = st.selectbox("Select a connection", cnx, index=0, key="cedit")
@@ -566,11 +384,15 @@ def connection_editor():
         if st.button("Delete connection"):
             del st.session_state["model"].connections[cnx_]
             cnx_ = None
+
+    # Edit dialog
     if cnx_ is not None:
         st.text(f"{cnx_}")
 
 
 def run_editor():
+    """Dialog for creating and editing model runs."""
+    # Run selection
     runs = st.session_state["model"].runs.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         run_ = st.selectbox("Select a run", runs, index=0, key="redit")
@@ -578,6 +400,8 @@ def run_editor():
         if st.button("Delete run"):
             del st.session_state["model"].runs[run_]
             run_ = None
+
+    # Edit dialog
     if run_ is not None:
         r: HydraulicModelRun = st.session_state["model"].runs[run_]
         with st.container(border=True):
@@ -614,6 +438,7 @@ def run_editor():
 
 
 def run_executor():
+    """Dialog for executing model runs via Lisflood API."""
     runs = st.session_state["model"].runs.keys()
     with st.container(horizontal=True, vertical_alignment="bottom"):
         run_ = st.selectbox("Select a run", runs, index=0, key="rexec")
@@ -625,18 +450,8 @@ def run_executor():
             st.rerun()
 
 
-def run_model(run_path):
-    try:
-        response = requests.post(f"{BASE_URL}/run_model", json={"model_dir": run_path})
-        if response.status_code == 200:
-            result = response.json()
-        else:
-            st.error(f"Model API returned {response.status_code}: {response.text}")
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error connecting to Lisflood API: {e}")
-
-
 def model_editor():
+    """Container for model editing dialogs."""
     t1, t2, t3, t4, t5, t6 = st.tabs(
         [
             "Model Summary",
@@ -662,7 +477,9 @@ def model_editor():
 
 
 def editor_tab():
+    """Top-level editor tab."""
     with st.container(border=True, gap=None):
+        # Model controls and main text
         c1, c2 = st.columns([1, 2], vertical_alignment="top")
         with c1:
             st.markdown("# Model Editor")
@@ -674,7 +491,7 @@ def editor_tab():
                             "Pull from cloud",
                             type="primary",
                             disabled=st.session_state["model"] is None,
-                            on_click=pull_from_Remote,
+                            on_click=pull_from_remote,
                         )
                         st.button(
                             "Push to cloud",
@@ -691,49 +508,10 @@ def editor_tab():
             st.markdown(f"**Currently editing:** {model_name}")
         with c2:
             model_control()
+
+        # Editing dialogs
         st.markdown(MARKDOWN_DIVIDER, unsafe_allow_html=True)
         if st.session_state["model"] is not None:
             model_editor()
         else:
             st.space("small")
-
-
-def init_session_state():
-    """Initialize session state."""
-    st.session_state["model"] = None
-
-
-def main():
-    st.set_page_config(layout="wide")
-    if "model" not in st.session_state:
-        st.session_state["model"] = None
-
-    st.markdown(
-        """
-    <style>
-        .stAppDeployButton {display:none;}
-        .stAppHeader {display:none;}
-        .block-container {
-               padding-top: 0.5rem;
-               padding-bottom: 0rem;
-            }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        "<h1 style='text-align: center;'>FIM 2D Model Development Tool</h1>",
-        unsafe_allow_html=True,
-    )
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        editor_tab()
-    with c2:
-        map_tab()
-
-
-if __name__ == "__main__":
-    main()
