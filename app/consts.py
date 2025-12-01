@@ -7,7 +7,7 @@ MODEL_PORT = os.getenv("MODEL_PORT", "5000")
 BASE_URL = f"http://{MODEL_HOST}:{MODEL_PORT}"
 TITILER_HOST = os.environ.get("TITILER_HOST", "http://localhost")
 TITILER_PORT = os.environ.get("TITILER_PORT", "8000")
-TITILER_URL = f"{TITILER_HOST}:{TITILER_PORT}"
+TITILER_URL = f"http://{TITILER_HOST}:{TITILER_PORT}"
 
 MARKDOWN_DIVIDER = """
             <div style="width:100%; margin-top:10px; margin-bottom:30px; padding:0;">
