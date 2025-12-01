@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Leaflet + TiTiler Map</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { width: 100%; height: 100vh; }
+    .leaflet-control-layers-expanded { max-height: 60vh; overflow: auto; }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- Config JSON (replaced by Streamlit; put raw JSON here so it is NOT HTML-escaped) -->
+<script id="config-data" type="application/json">
+__CONFIG_JSON__
+</script>
+
+<script>
+// Helpful error logging (open DevTools Console)
+window.onerror = function(msg, url, line, col, err) {
+  console.error("JS Error:", msg, " at ", line + ":" + col, err);
+};
+
+// Parse config safely
+let CONFIG;
+try {
+  const raw = document.getElementById("config-data").textContent;
+  CONFIG = JSON.parse(raw);
+} catch (err) {
+  console.error("Failed to parse CONFIG JSON:", err);
+  CONFIG = {
+    center: [0,0],
+    zoom: 2,
+    default_basemap: "OpenStreetMap",
+    basemaps: [],
+    overlays: []
+  };
+}
+
+// Create map
+const map = L.map('map').setView(CONFIG.center || [0,0], CONFIG.zoom || 2);
+
+// Helper to create a tile layer with common options
+function mkTile(url, opts = {}) {
+  // If the URL is empty or falsy, return a dummy empty layer (useful for "None")
+  if (!url) return L.tileLayer('', opts);
+  return L.tileLayer(url, Object.assign({
+  }, opts));
+}
+
+/* ---------- Basemaps ---------- */
+// Build basemap layers from CONFIG.basemaps if present, otherwise fallback to built-ins
+const basemapDict = {};
+if (Array.isArray(CONFIG.basemaps) && CONFIG.basemaps.length) {
+  CONFIG.basemaps.forEach((b, idx) => {
+    basemapDict[b.name] = mkTile(b.url, b);
+    // add first basemap as default if default not specified
+    if (CONFIG.default_basemap ? (b.name === CONFIG.default_basemap) : (idx === 0)) {
+      basemapDict[b.name].addTo(map);
+    }
+  });
+} else {
+  // fallback basemaps
+  basemapDict["OpenStreetMap"] = mkTile("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: '&copy; OpenStreetMap contributors' });
+  basemapDict["Esri World Imagery"] = mkTile("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { attribution: 'Esri' });
+  // add default
+  basemapDict["OpenStreetMap"].addTo(map);
+}
+
+/* ---------- Overlays ---------- */
+const overlayDict = {};
+if (Array.isArray(CONFIG.overlays)) {
+  CONFIG.overlays.forEach(o => {
+    try {
+      const lyr = mkTile(o.url, {
+        attribution: o.attribution || '',
+        opacity: (typeof o.opacity === 'number') ? o.opacity : 1.0,
+      });
+      overlayDict[o.name] = lyr;
+      if (o.visible) lyr.addTo(map);
+    } catch (err) {
+      console.error("Failed to create overlay for", o, err);
+    }
+  });
+}
+
+/* ---------- Vectors ---------- */
+if (Array.isArray(CONFIG.vectors)) {
+  CONFIG.vectors.forEach(v => {
+    try {
+      let geojson = v.data;
+
+      // If data is a string, parse it
+      if (typeof geojson === "string") {
+        geojson = JSON.parse(geojson);
+      }
+
+      const geojsonLayer = L.geoJSON(geojson, {
+        style: v.style || {},
+        pointToLayer: function (feature, latlng) {
+          return L.circleMarker(latlng, v.style || {});
+        }
+      });
+
+      overlayDict[v.name] = geojsonLayer;
+      if (v.visible) geojsonLayer.addTo(map);
+
+    } catch (err) {
+      console.error("Failed to create vector layer for", v, err);
+    }
+  });
+}
+
+/* ---------- Layer control ---------- */
+try {
+  L.control.layers(basemapDict, overlayDict, { collapsed: false }).addTo(map);
+} catch (err) {
+  console.error("Failed to add layer control:", err);
+}
+
+/* ---------- Optional: click popup with coords ---------- */
+map.on('click', function(e) {
+  L.popup()
+    .setLatLng(e.latlng)
+    .setContent(`<b>Lat</b>: ${e.latlng.lat.toFixed(6)}<br/><b>Lon</b>: ${e.latlng.lng.toFixed(6)}`)
+    .openOn(map);
+});
+
+</script>
+</body>
+</html>

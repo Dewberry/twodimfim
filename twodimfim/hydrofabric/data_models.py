@@ -108,7 +108,7 @@ class ReachContext:
         )
         return cast(Polygon, geom)
 
-    def export_to_dir(self, export_dir: str | Path) -> dict[str, str]:
+    def export_to_dir(self, export_dir: str | Path, ftype: str = "parquet") -> dict[str, str]:
         export_dir = Path(export_dir)
         out_dict = {}
 
@@ -121,16 +121,18 @@ class ReachContext:
             "all_ds_divides",
         ]:
             geom = getattr(self, i)
-            out_path = export_dir / f"{i}.parquet"
+            out_path = export_dir / f"{i}.{ftype}"
             self.export_shape(geom, out_path)
             out_dict[i] = str(out_path)
 
         return out_dict
 
     def export_shape(self, geometry: BaseGeometry, out_path: str | Path) -> None:
-        gpd.GeoDataFrame({"ind": [1]}, geometry=[geometry], crs=self.crs).to_parquet(
-            out_path
-        )
+        gdf = gpd.GeoDataFrame({"ind": [1]}, geometry=[geometry], crs=self.crs)
+        if str(out_path).endswith("parquet"):
+            gdf.to_parquet(out_path)
+        else:
+            gdf.to_file(out_path)
 
     def make_us_bc_line(
         self,
@@ -154,25 +156,26 @@ class ReachContext:
         walk_us_dist_pct: float = 0.25,
         inflow_width: float = 10,
         buffer: float = 100,
+        ftype: str = "parquet"
     ) -> dict[str, str]:
         # Export standard elements
-        out_dict = self.export_to_dir(export_dir)
+        out_dict = self.export_to_dir(export_dir, ftype)
 
         # Export additional elements
         us_bc = self.make_us_bc_line(walk_us_dist_pct, inflow_width)
-        out_path = Path(export_dir) / "us_bc_line.parquet"
+        out_path = Path(export_dir) / f"us_bc_line.{ftype}"
         self.export_shape(us_bc, out_path)
         out_dict["us_bc_line"] = str(out_path)
 
         bbox = BBox(*unary_union([self.divide, us_bc]).bounds)
         bbox.buffer(buffer)
         bbox_shape = box(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)
-        out_path = Path(export_dir) / "bbox.parquet"
+        out_path = Path(export_dir) / f"bbox.{ftype}"
         self.export_shape(bbox_shape, out_path)
         out_dict["bbox"] = str(out_path)
 
         transfer_line = self.make_transfer_line(bbox)
-        out_path = Path(export_dir) / "transfer.parquet"
+        out_path = Path(export_dir) / f"transfer.{ftype}"
         self.export_shape(transfer_line, out_path)
         out_dict["transfer"] = str(out_path)
 

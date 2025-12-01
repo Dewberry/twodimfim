@@ -8,9 +8,10 @@ from typing import Any
 import geopandas as gpd
 from affine import Affine
 from pyproj import CRS
-from shapely import Polygon, unary_union
+from shapely import MultiLineString, Polygon, unary_union
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import linemerge
 
 from twodimfim import __version__ as self_version
 from twodimfim.consts import (
@@ -343,6 +344,10 @@ class ModelDomain:
     def geometry_to_bc_points(self, geometry: BaseGeometry) -> list[list[str | float]]:
         if isinstance(geometry, Point):
             return [["P", geometry.x, geometry.y]]
+        elif isinstance(geometry, MultiLineString):
+            geometry = linemerge(geometry)
+            pts = rasterize_line(geometry, self.rows, self.cols, self.transform)
+            return [["P", i[0], i[1]] for i in pts]
         elif isinstance(geometry, LineString):
             pts = rasterize_line(geometry, self.rows, self.cols, self.transform)
             return [["P", i[0], i[1]] for i in pts]
@@ -408,6 +413,7 @@ class HydraulicModel:
         domain_buffer: float = 100,
         crs: str = COMMON_CRS,
         metadata: dict = {},
+        vector_ftype: str = "parquet",
     ):
         # Initialize model directory
         context = HydraulicModelContext(Path(model_root), CRS.from_user_input(crs))
@@ -417,7 +423,7 @@ class HydraulicModel:
         vector_dir = context.model_root / DEFAULT_VECTOR_DIR
         reach_context = ReachContext(vpu, reach_id)
         _vectors = reach_context.export_default_domain(
-            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer
+            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer, vector_ftype
         )
         std_meta = DatasetMetadata("file", reach_context.gpkg_path)
         vectors = {}
