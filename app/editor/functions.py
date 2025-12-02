@@ -4,12 +4,19 @@ from urllib import request
 
 import requests
 import streamlit as st
+from pyproj import CRS
 
 from app.consts import BASE_URL, DATA_DIR, REMOTE_DATA_DIR
-from twodimfim.models.data_models import HydraulicModel
+from twodimfim.models.data_models import (
+    HydraulicModel,
+    HydraulicModelContext,
+    HydraulicModelMetadata,
+)
 
 
-def make_new_model(vpu: str, reach_id: int, resolution: float, inflow_width: float):
+def make_new_hydrofabric_model(
+    vpu: str, reach_id: int, resolution: float, inflow_width: float
+):
     """Create a new HydraulicModel and store it in session state."""
     model_root = Path(DATA_DIR) / str(reach_id)
     st.session_state["model"] = HydraulicModel.from_hydrofabric(
@@ -20,6 +27,17 @@ def make_new_model(vpu: str, reach_id: int, resolution: float, inflow_width: flo
         inflow_width=inflow_width,
         vector_ftype="shp",
     )
+    st.session_state["model"].save()
+
+
+def make_new_empty_model(title: str, crs: str):
+    """Create a new, empty HydraulicModel and store it in session state."""
+    meta = HydraulicModelMetadata(title=title)
+    model_root = Path(DATA_DIR) / str(title)
+    model_root.mkdir(parents=True, exist_ok=True)
+    context = HydraulicModelContext(model_root, CRS.from_user_input(crs))
+    HydraulicModel.init_model_dir(context.model_root)
+    st.session_state["model"] = HydraulicModel(metadata=meta, _context=context)
     st.session_state["model"].save()
 
 
