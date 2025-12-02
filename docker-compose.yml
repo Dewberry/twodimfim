@@ -10,9 +10,7 @@ services:
       - "8000:8000"
 
   streamlit-app:
-    # image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/owp-2d-streamlit:latest
-    build:
-      context: .
+    image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/owp-2d-streamlit:latest
     container_name: streamlit-app
     user: "${UID}:${GID}"
     ports:

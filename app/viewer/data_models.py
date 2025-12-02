@@ -7,7 +7,7 @@ import geopandas as gpd
 import requests
 from pyproj import Transformer
 
-from app.consts import TITILER_URL_INTERNAL, TITILER_PORT
+from app.consts import TITILER_URL_INTERNAL, TITILER_URL_EXTERNAL
 
 
 class OverlayLayer:
