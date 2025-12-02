@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 import rasterio
@@ -10,11 +11,12 @@ from app.consts import BASEMAPS
 from app.viewer.data_models import OverlayLayer, VectorLayer
 
 
-def get_map_center():
-    """Return the center coordinates for the map."""
+def get_map_view():
+    """Return the center coordinates and zoom for the map."""
     valid_layers = [i for i in st.session_state["layers"].values() if i is not None]
     if len(valid_layers) == 0:
         center = [39.8, -98.5]
+        zoom = 4
     else:
         bounds = [9999, 9999, -9999, -9999]
         for i in valid_layers:
@@ -29,14 +31,16 @@ def get_map_center():
             bounds[1] + (bounds[3] - bounds[1]) / 2,
             bounds[0] + (bounds[2] - bounds[0]) / 2,
         ]
-    return center
+        zoom = int(8 - math.log2(max(bounds[2] - bounds[0], bounds[3] - bounds[1])))
+    return center, zoom
 
 
 def generate_configuration():
     """Create a config json to be used by the map viewer."""
+    center, zoom = get_map_view()
     cfg = {
-        "center": get_map_center(),
-        "zoom": 12,
+        "center": center,
+        "zoom": zoom,
         "basemaps": BASEMAPS,
         "overlays": [
             i.to_overlay_dict()
