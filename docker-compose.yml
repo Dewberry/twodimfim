@@ -10,7 +10,9 @@ services:
       - "8000:8000"
 
   streamlit-app:
-    image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/owp-2d-streamlit:latest
+    # image: 172866912423.dkr.ecr.us-east-1.amazonaws.com/owp-2d-streamlit:latest
+    build:
+      context: .
     container_name: streamlit-app
     user: "${UID}:${GID}"
     ports:
@@ -21,7 +23,8 @@ services:
     environment:
       - MODEL_HOST=lisflood-runner
       - MODEL_PORT=5000
-      - TITILER_HOST=titiler
+      - TITILER_DOCKER_SERVICE=titiler
+      - HOST_IP=localhost
       - TITILER_PORT=8000
       - MODEL_DIR=/data
       - HYDROFABRIC_DIR=/hydrofabric
