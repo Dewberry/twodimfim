@@ -465,7 +465,7 @@ class HydraulicModel:
                 d["runs"][i]["_context"] = context
         domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
         vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
-        runs = {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
+        runs = {k: HydraulicModelRun.from_dict(v) for k, v in d["runs"].items()}
         connections = {k: ModelConnection(**v) for k, v in d["connections"].items()}
         return cls(metadata, domains, vectors, runs, connections, _context=context)
 
