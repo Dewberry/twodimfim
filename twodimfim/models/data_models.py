@@ -210,6 +210,7 @@ class HydraulicModelRun:
     run_dir_stem: str = DEFAULT_RUN_DIR
     parfile_name: str = PAR_FILE
     bcifile_name: str = BCI_FILE
+    use_cuda: bool = True
     _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @classmethod
