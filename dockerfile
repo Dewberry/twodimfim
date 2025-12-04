@@ -5,7 +5,7 @@ USER root
 # Install basic dependencies
 RUN apt-get update && \
     apt-get install -y \
-    rsync
+    rsync git curl
 
 # Set working directory
 WORKDIR /app
