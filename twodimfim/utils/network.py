@@ -24,6 +24,7 @@ class RiverReach:
     us_ms: int = -9999
     ds: int = -9999
     length_km: int = -9999
+    da: float = -9999.0
 
 
 class NetworkWalker:
@@ -50,6 +51,7 @@ class NetworkWalker:
             self.network[stream_toid].us_da.append(getattr(r, DA_COL))
             self.network[stream_id].ds = stream_toid
             self.network[stream_id].length_km = getattr(r, LENGTH_COL)
+            self.network[stream_id].da = getattr(r, DA_COL)
         self.network = dict(
             self.network
         )  # re-cast to plain dict so that non-existent nodes don't have blank entries
