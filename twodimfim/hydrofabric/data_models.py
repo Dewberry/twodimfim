@@ -3,7 +3,15 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
-from shapely import LineString, Point, Polygon, box, clip_by_rect, unary_union
+from shapely import (
+    LineString,
+    MultiPolygon,
+    Point,
+    Polygon,
+    box,
+    clip_by_rect,
+    unary_union,
+)
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge
 
@@ -176,6 +184,21 @@ class ReachContext:
         )
         return cast(LineString, geom)
 
+    def make_transfer_line_offset(self, bbox: BBox, resolution: float) -> LineString:
+        debuff = self.all_ds_divides.buffer(-resolution)
+        if isinstance(debuff, MultiPolygon):
+            debuff = max(debuff.geoms, key=lambda g: g.area)
+        debuff = debuff.exterior
+
+        geom = clip_by_rect(
+            debuff,
+            bbox.xmin,
+            bbox.ymin,
+            bbox.xmax,
+            bbox.ymax,
+        )
+        return cast(LineString, geom)
+
     def export_default_domain(
         self,
         export_dir: str | Path,
@@ -183,6 +206,7 @@ class ReachContext:
         inflow_width: float = 10,
         buffer: float = 100,
         ftype: str = "parquet",
+        resolution: float = 10,
     ) -> dict[str, str]:
         # Export standard elements
         out_dict = self.export_to_dir(export_dir, ftype)
@@ -204,5 +228,10 @@ class ReachContext:
         out_path = Path(export_dir) / f"transfer.{ftype}"
         self.export_shape(transfer_line, out_path)
         out_dict["transfer"] = str(out_path)
+
+        transfer_line_offset = self.make_transfer_line_offset(bbox, resolution)
+        out_path = Path(export_dir) / f"transfer_offset.{ftype}"
+        self.export_shape(transfer_line_offset, out_path)
+        out_dict["transfer_offset"] = str(out_path)
 
         return out_dict
