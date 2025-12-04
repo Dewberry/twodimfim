@@ -21,8 +21,8 @@ from twodimfim.consts import (
     NLCD_WMS_URL,
     USGS_3DEP_URL,
     SourceType,
+    UnitsType,
 )
-from twodimfim.models.data_models import UnitsType
 from twodimfim.utils.geospatial import BBox, transform_shape
 
 ### DATA MODELS ###
