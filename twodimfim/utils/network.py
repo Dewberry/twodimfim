@@ -91,6 +91,8 @@ class NetworkWalker:
             if next_ is None:
                 break
             walk_length += next_.length_km
+            if next_.us_ms == -9999:
+                break
             path.append(next_.us_ms)
         return path[1:]
 
