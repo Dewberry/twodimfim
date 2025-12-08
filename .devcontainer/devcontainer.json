@@ -11,7 +11,8 @@
       "extensions": [
         "ms-python.python",
         "charliermarsh.ruff",
-        "yy0931.vscode-sqlite3-editor"
+        "yy0931.vscode-sqlite3-editor",
+        "ms-python.debugpy"
       ]
     }
   }
