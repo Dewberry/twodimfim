@@ -6,8 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import numpy as np
+import pandas as pd
 from affine import Affine
 from pyproj import CRS
+from rasterio.errors import RasterioIOError
 from shapely import MultiLineString, Polygon, unary_union
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
@@ -34,9 +37,12 @@ from twodimfim.utils.etl import DatasetMetadata, get_nlcd_mannings, get_usgs_dem
 from twodimfim.utils.geospatial import (
     BBox,
     poly_to_edges,
+    raster_2_array,
     rasterize_line,
     sample_raster,
+    sample_wse_from_depth_el,
     snap_bbox_to_grid,
+    water_on_invalid_boundary,
 )
 
 
@@ -233,12 +239,82 @@ class HydraulicModelRun:
         return self.run_dir / self.bcifile_name
 
     @property
+    def depth_file_paths(self) -> Path:
+        paths = self.run_dir.glob(f"{self.idx}-????.wd")
+        return sorted(paths, key=lambda x: int(x.stem.split("-")[1]))
+
+    @property
     def depth_grid_path(self) -> Path:
         return self.run_dir / f"{self.idx}.max"
 
     @property
     def wse_grid_path(self) -> Path:
         return self.run_dir / f"{self.idx}.mxe"
+
+    @property
+    def mass_file_path(self) -> Path:
+        return self.run_dir / f"{self.idx}.mass"
+
+    @property
+    def mass_table(self) -> pd.DataFrame:
+        return pd.read_csv(self.mass_file_path, sep="\\s+")
+
+    def is_converged(self, tolerance: float, method: str = "mean_depth") -> bool:
+        wd_files = sorted(self.depth_file_paths)
+        if len(wd_files) < 2:
+            return False  # Not enough files to compare
+        latest_file = wd_files[-1]
+        previous_file = wd_files[-2]
+
+        # Read the last time step from both files
+        latest_data = raster_2_array(latest_file)
+        previous_data = raster_2_array(previous_file)
+
+        if method == "mean_depth":
+            # Calculate average depth and average depth change
+            avg_depth = latest_data[latest_data > 0].mean()
+            depth_change = abs(latest_data - previous_data)
+            avg_depth_change = depth_change[latest_data > 0].mean()
+            if avg_depth == 0:
+                return False
+            relative_change = avg_depth_change / avg_depth
+        elif method == "max_depth_change":
+            avg_depth = latest_data[latest_data > 0].mean()
+            depth_change = abs(latest_data - previous_data)
+            max_depth_change = depth_change.max()
+            if avg_depth == 0:
+                return False
+            relative_change = max_depth_change / avg_depth
+        elif method == "volume_change":
+            # NOTE: LISFLOOD-FP mass file is not filled out when CUDA is enabled
+            df = self.mass_table
+            vol_series = df["Vol"].values
+            if len(vol_series) < 2:
+                return False
+            dv = np.diff(vol_series)
+            relative_change = abs(dv[-1]) / dv.mean()
+
+        return relative_change < tolerance
+
+    def water_on_invalid_boundary(self, valid_polygon: Polygon) -> bool:
+        """Check if water is along a boundary that is not allowed."""
+        return any(self.check_water_on_invalid_boundaries(valid_polygon).values())
+
+    def check_water_on_invalid_boundaries(
+        self, valid_polygon: Polygon
+    ) -> dict[str, bool]:
+        """Check if water is along a boundary that is not allowed."""
+        wd_files = sorted(self.depth_file_paths)
+        if not wd_files:
+            return {
+                "north": False,
+                "south": False,
+                "west": False,
+                "east": False,
+            }  # No depth files to check
+        latest_file = wd_files[-1]
+
+        return water_on_invalid_boundary(latest_file, valid_polygon)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -358,6 +434,14 @@ class ModelDomain:
             raise RuntimeError(
                 f"Boundary condition was type {geometry.geom_type}, but only Point, LineString, and Polygon are accepted"
             )
+
+    def edges_to_bc_points(self) -> list[list[str | float]]:
+        return [
+            ["N", self.bbox.xmin, self.bbox.xmax],
+            ["S", self.bbox.xmin, self.bbox.xmax],
+            ["W", self.bbox.ymin, self.bbox.ymax],
+            ["E", self.bbox.ymin, self.bbox.ymax],
+        ]
 
     def check_files(self) -> None:
         if self.terrain is None:
@@ -525,8 +609,14 @@ class HydraulicModel:
     def _process_bc_line(
         self, bc: BoundaryCondition, domain: ModelDomain
     ) -> list[list[str | float]]:
-        line = self.vectors[bc.geometry_vector]
-        pts = domain.geometry_to_bc_points(line.shape)
+        # Get points from geometry
+        if bc.geometry_vector == "all":
+            pts = domain.edges_to_bc_points()
+        else:
+            line = self.vectors[bc.geometry_vector]
+            pts = domain.geometry_to_bc_points(line.shape)
+
+        # Build final points with BC info
         if bc.bc_type == "QFIX":
             q_tmp = float(bc.value) / (domain.resolution * len(pts))
             pts = [[*i, "QFIX", q_tmp] for i in pts]
