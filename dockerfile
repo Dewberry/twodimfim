@@ -8,7 +8,7 @@ RUN apt-get update && \
     rsync git curl
 
 # Set working directory
-WORKDIR /app
+WORKDIR /twodimfim
 
 # Set up environment
 COPY environment.yaml pyproject.toml ./
