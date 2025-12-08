@@ -16,7 +16,8 @@ from shapely.geometry import MultiPolygon, Polygon
 DATA_DIR = Path("/data")
 OUTPUT_DIR = DATA_DIR / "postprocessed"
 OUTPUT_DIR.mkdir(exist_ok=True)
-VRT_PATH = OUTPUT_DIR / "Q100_depths.vrt"
+RI = "Q100"
+VRT_PATH = OUTPUT_DIR / f"{RI}_depths.vrt"
 GPKG_PATH = OUTPUT_DIR / "combined.gpkg"
 # ---------------------------
 
@@ -34,7 +35,7 @@ def rasterize_mask(gdf, template_ds):
 
 
 def process_depth_raster(model_dir: Path):
-    depth_path = model_dir / "runs" / "Q100" / "Q100.max"
+    depth_path = model_dir / "runs" / RI / f"{RI}.max"
     try:
         us_gdf = gpd.read_parquet(model_dir / "vectors" / "us_ms_divide.parquet")
     except FileNotFoundError:
@@ -62,7 +63,7 @@ def process_depth_raster(model_dir: Path):
         depth_masked = depth.copy()
         depth_masked[combined_mask] = nodata
 
-        out_path = OUTPUT_DIR / f"{model_dir.name}.tif"
+        out_path = OUTPUT_DIR / f"{model_dir.name}_{RI}.tif"
         tmp_path = out_path.with_suffix(".tmp.tif")
 
         profile.update(
@@ -135,7 +136,7 @@ def process_geometries(model_dir: Path):
 
 def post_process():
     # 1. Find all Q100.max rasters in model folders
-    depth_rasters = list(DATA_DIR.glob("69*/runs/Q100/Q100.max"))
+    depth_rasters = list(DATA_DIR.glob(f"69*/runs/{RI}/{RI}.max"))
     output_files = []
 
     # Collect all GeoDataFrames
@@ -158,7 +159,9 @@ def post_process():
     # 2. Build VRT
     if output_files:
         print("Building VRT...")
-        gdal.BuildVRT(str(VRT_PATH), output_files)
+        gdal.BuildVRT(
+            str(VRT_PATH), output_files, options=gdal.BuildVRTOptions(resampleAlg="max")
+        )
         print(f"VRT created at {VRT_PATH}")
     else:
         print("No output rasters created.")
