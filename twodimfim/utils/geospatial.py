@@ -40,6 +40,14 @@ class BBox:
         self.xmax += buffer_dist
         self.ymax += buffer_dist
 
+    @property
+    def width(self) -> float:
+        return self.xmax - self.xmin
+
+    @property
+    def height(self) -> float:
+        return self.ymax - self.ymin
+
 
 def snap_bbox_to_grid(bbox: BBox, resolution: float) -> BBox:
     return BBox(
@@ -143,4 +151,77 @@ def sample_raster(
     x_ind = np.floor(x_ind).astype(int)
     y_ind = np.floor(y_ind).astype(int)
 
-    return list(arr[y_ind, x_ind])
+    ### DEBUG ###
+    # In production, this case should not happen.
+    # If this happens in productions, it indicates that the current reach abuts more than it's next d/s reach
+    x_mask = (np.array(x_ind) < 0) | (np.array(x_ind) >= arr.shape[1])
+    y_mask = (np.array(y_ind) < 0) | (np.array(y_ind) >= arr.shape[0])
+    total_mask = x_mask | y_mask
+    x_ind = x_ind[~total_mask]
+    y_ind = y_ind[~total_mask]
+
+    out = np.full(len(points), np.nan)
+    out[~total_mask] = arr[y_ind, x_ind]
+
+    return [i if not np.isnan(i) else None for i in out]
+
+
+def sample_wse_from_depth_el(
+    dem_path: str | Path,
+    depth_path: str | Path,
+    points: list[tuple[float, float]],
+) -> list[float]:
+    els = sample_raster(dem_path, points)
+    ds = sample_raster(depth_path, points)
+    vals = []
+    for e, d in zip(els, ds):
+        if e is None or d is None:
+            vals.append(None)
+        else:
+            vals.append(e + d if d > 0.01 else None)
+    return vals
+
+
+def raster_2_array(file_path: Path | str) -> np.ndarray:
+    """Load a raster file and return its data as a NumPy array."""
+    with rasterio.open(file_path) as src:
+        data = src.read(1)
+    return data
+
+
+def water_on_invalid_boundary(raster_path: str | Path, valid_polygon: Polygon) -> bool:
+    """Check if water is along a boundary that is not allowed."""
+    # Load raster data and rasterize the valid polygon
+    with rasterio.open(raster_path) as src:
+        data = src.read(1)
+        transform = src.transform
+        out_shape = (src.height, src.width)
+    valid_mask = rasterio.features.rasterize(
+        [(valid_polygon, 1)],
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        all_touched=True,
+        dtype="uint8",
+    )
+
+    # Identify water cells (assuming water depth > 0.01 indicates water presence)
+    water_mask = data > 0.01
+
+    # Create a boundary mask
+    boundary_mask = np.zeros_like(data, dtype=bool)
+    boundary_mask[0, :] = True  # Top row
+    boundary_mask[-1, :] = True  # Bottom row
+    boundary_mask[:, 0] = True  # Left column
+    boundary_mask[:, -1] = True  # Right column
+
+    # Check for water on invalid boundaries
+    invalid_boundary_mask = boundary_mask & water_mask & (valid_mask == 0)
+
+    # Split out into N, S, E, W boundaries
+    return {
+        "north": np.any(invalid_boundary_mask[0, :]),
+        "south": np.any(invalid_boundary_mask[-1, :]),
+        "west": np.any(invalid_boundary_mask[:, 0]),
+        "east": np.any(invalid_boundary_mask[:, -1]),
+    }

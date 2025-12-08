@@ -25,7 +25,7 @@ from twodimfim.consts import (
     STREAM_ID_PREFIX,
     STREAM_LAYER,
 )
-from twodimfim.errors import MissingReachError
+from twodimfim.errors import DownstreamModelMisalignmentError, MissingReachError
 from twodimfim.utils.geospatial import (
     BBox,
     perpendicular_line,
@@ -179,9 +179,14 @@ class ReachContext:
             return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
 
     def make_transfer_line(self, bbox: BBox) -> LineString:
-        geom = clip_by_rect(
-            self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
-        )
+        # geom = clip_by_rect(
+        #     self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
+        # )
+        geom = LineString(self.all_ds_divides.exterior.coords)
+        if geom.is_empty:
+            raise DownstreamModelMisalignmentError(
+                "The downstream model's divide does not intersect with the upstream model's bbox."
+            )
         return cast(LineString, geom)
 
     def make_transfer_line_offset(self, bbox: BBox, resolution: float) -> LineString:
@@ -190,13 +195,18 @@ class ReachContext:
             debuff = max(debuff.geoms, key=lambda g: g.area)
         debuff = debuff.exterior
 
-        geom = clip_by_rect(
-            debuff,
-            bbox.xmin,
-            bbox.ymin,
-            bbox.xmax,
-            bbox.ymax,
-        )
+        # geom = clip_by_rect(
+        #     debuff,
+        #     bbox.xmin,
+        #     bbox.ymin,
+        #     bbox.xmax,
+        #     bbox.ymax,
+        # )
+        geom = LineString(debuff.coords)
+        if geom.is_empty:
+            raise DownstreamModelMisalignmentError(
+                "The downstream model's divide does not intersect with the upstream model's bbox."
+            )
         return cast(LineString, geom)
 
     def export_default_domain(
@@ -224,14 +234,20 @@ class ReachContext:
         self.export_shape(bbox_shape, out_path)
         out_dict["bbox"] = str(out_path)
 
-        transfer_line = self.make_transfer_line(bbox)
-        out_path = Path(export_dir) / f"transfer.{ftype}"
-        self.export_shape(transfer_line, out_path)
-        out_dict["transfer"] = str(out_path)
+        try:
+            transfer_line = self.make_transfer_line(bbox)
+            out_path = Path(export_dir) / f"transfer.{ftype}"
+            self.export_shape(transfer_line, out_path)
+            out_dict["transfer"] = str(out_path)
+        except DownstreamModelMisalignmentError:
+            pass
 
-        transfer_line_offset = self.make_transfer_line_offset(bbox, resolution)
-        out_path = Path(export_dir) / f"transfer_offset.{ftype}"
-        self.export_shape(transfer_line_offset, out_path)
-        out_dict["transfer_offset"] = str(out_path)
+        try:
+            transfer_line_offset = self.make_transfer_line_offset(bbox, resolution)
+            out_path = Path(export_dir) / f"transfer_offset.{ftype}"
+            self.export_shape(transfer_line_offset, out_path)
+            out_dict["transfer_offset"] = str(out_path)
+        except DownstreamModelMisalignmentError:
+            pass
 
         return out_dict
