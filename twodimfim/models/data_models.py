@@ -543,5 +543,12 @@ class HydraulicModel:
         tmp_model = HydraulicModel.from_file(connection.model_path)
         tmp_run = tmp_model.runs[connection.run_id]
         coords = [(float(i[1]), float(i[2])) for i in pts]
-        vals = sample_raster(tmp_run.wse_grid_path, coords)
-        return [[*i, "HFIX", v] for i, v in zip(pts, vals)]
+        try:
+            vals = sample_raster(tmp_run.wse_grid_path, coords)
+        except RasterioIOError:
+            vals = sample_wse_from_depth_el(
+                tmp_model.domains[tmp_run.domain].terrain.path,
+                tmp_run.depth_grid_path,
+                coords,
+            )
+        return [[*i, "HFIX", v] for i, v in zip(pts, vals) if v is not None]
