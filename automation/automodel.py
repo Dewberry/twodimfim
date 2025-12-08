@@ -42,6 +42,11 @@ LISFLOOD_RUNNER_URL = "http://lisflood-runner:5000"
 DATA_DIR = Path("/data")
 
 
+def bieger_bankfull_width(da_sqkm: float) -> float:
+    """Estimate bankfull width (m) from drainage area (km2) using Bieger et al. (2015) regression for US."""
+    return 2.7 * (da_sqkm**0.352)
+
+
 def q2(da_sqkm: float) -> float:
     """Estimate Q100 (m3/s) from drainage area (km2) using USGS regression for Vermont."""
     da_sqmi = da_sqkm / 2.58999
@@ -416,7 +421,10 @@ def setup_models(vpu: str, root: int):
             logger.info(f"Model for reach {i} already exists, skipping.")
         else:
             logger.info(f"Creating model for reach {i}.")
-            model = HydraulicModel.from_hydrofabric(vpu, i, RESOLUTION, model_path)
+            inflow_width = bieger_bankfull_width(da_sqkm)
+            model = HydraulicModel.from_hydrofabric(
+                vpu, i, RESOLUTION, model_path, inflow_width=inflow_width
+            )
             del model.domains[f"hydrofabric_res_{RESOLUTION}"]  # All custom
             model.save()
         db.add_model(i, str(model_path / "model.json"), da_sqkm, ds_id)
