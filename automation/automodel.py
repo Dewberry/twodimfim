@@ -18,6 +18,9 @@ from twodimfim.utils.geospatial import BBox
 
 os.environ["HYDROFABRIC_DIR"] = "/hydrofabric"
 
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
+
 from twodimfim.models.data_models import (
     BoundaryCondition,
     HydraulicModel,
@@ -29,7 +32,11 @@ from twodimfim.models.data_models import (
 )
 from twodimfim.utils.network import NetworkWalker
 
+# Silent insecure request warnings
+urllib3.disable_warnings(InsecureRequestWarning)
+
 ROOT = 69041  # Winooski River at Lake Champlain
+# ROOT = 69131  # Mad River at Winooski River
 VPU = 2
 RESOLUTION = 30
 DATA_DIR = Path("/data")
@@ -245,7 +252,7 @@ class DataBaseConnection:
 ### AUTOMATION FUNCTIONS ###
 
 
-def execute_runs(run_id: str, allow_domain_refinement: bool = True):
+def execute_runs(run_id: str, allow_domain_refinement: bool = True, max_attempts=5):
     """Traverse network, running each model for each reach."""
     db = DataBaseConnection(DB_PATH)
     while True:
@@ -253,14 +260,24 @@ def execute_runs(run_id: str, allow_domain_refinement: bool = True):
         if next_run is None:
             logger.info("No more runs to process.")
             break
+        attempts = 0
+        raise_boundary_error = True
         try:
             logger.info(f"Executing model {next_run[0]} run {next_run[1]}")
-            execute_steady_state_run(next_run[0], next_run[1], tolerance=0.02)
+            execute_steady_state_run(
+                next_run[0],
+                next_run[1],
+                tolerance=0.1,
+                raise_on_invalid_boundary=raise_boundary_error,
+            )
             db.update_run_status(next_run[0], next_run[1], "success")
         except WaterOnInvalidBoundaryError as e:
             logger.info(f"Model {next_run[0]} run {next_run[1]} failed: {e}")
             if allow_domain_refinement:
                 modify_domain_and_rerun(next_run[0], next_run[1])
+                attempts += 1
+                if attempts > max_attempts:
+                    raise_boundary_error = False
             else:
                 db.update_run_status(next_run[0], next_run[1], "failure")
         except Exception as e:
@@ -289,7 +306,7 @@ def execute_steady_state_run(
     run_id: str,
     tolerance: float = 0.05,
     inc: int = 900,
-    max_iter: int = 60,
+    max_iter: int = 10,
     raise_on_invalid_boundary: bool = True,
 ) -> bool:
     """Execute a steady state model run."""
@@ -330,7 +347,8 @@ def execute_steady_state_run(
                     f"Water on invalid boundary in model {model_id} run {run_id}."
                 )
         # Check for convergence
-        if tmp_run.is_converged(tolerance, "max_depth_change"):
+        domain_res = model.domains[tmp_run.domain].resolution
+        if tmp_run.is_converged(tolerance, "volume_change", resolution=domain_res):
             logger.info(f"Model converged after {iter + 1} iterations.")
             return True
 
@@ -353,12 +371,15 @@ def modify_domain_and_rerun(model_id: int, run_id: str):
     domain = model.domains[run.domain]
 
     # Find bad edges
-    valid_pool_poly = unary_union(
-        [
-            model.vectors["all_ds_divides"].shape,
-            model.vectors["all_us_divides"].shape,
-        ]
-    )
+    if "all_us_divides" in model.vectors:
+        valid_pool_poly = unary_union(
+            [
+                model.vectors["all_ds_divides"].shape,
+                model.vectors["all_us_divides"].shape,
+            ]
+        )
+    else:
+        valid_pool_poly = model.vectors["all_ds_divides"].shape
     edges = run.check_water_on_invalid_boundaries(valid_pool_poly)
 
     # Modify bbox
@@ -486,8 +507,9 @@ def setup_and_execute_production_runs(
 
     db = DataBaseConnection(DB_PATH)
     model_ids = {a: (a, b, c, d) for a, b, c, d in db.get_models()}
-    cur_reach = ROOT
-    while cur_reach is not None:
+    queue = [ROOT]
+    while len(queue) > 0:
+        cur_reach = queue.pop(0)
         model_id, model_path, da_sqkm, ds_id = model_ids[cur_reach]
 
         # Build runs
@@ -530,10 +552,8 @@ def setup_and_execute_production_runs(
         # Move to downstream reach
         for model_id, _, _, ds_id in model_ids.values():
             if ds_id == cur_reach:
-                cur_reach = model_id
-                break
-        else:
-            cur_reach = None
+                # print(model_id)
+                queue.append(model_id)
 
 
 def create_run(
@@ -639,7 +659,7 @@ def main():
     setup_default_runs(overwrite=False)
     execute_runs("prelim_Q500")
     setup_refined_domains(10)
-    setup_and_execute_production_runs(RI_LIST, overwrite=True)
+    setup_and_execute_production_runs(RI_LIST, overwrite=False)
 
 
 if __name__ == "__main__":
