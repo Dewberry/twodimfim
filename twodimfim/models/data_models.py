@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
+from re import S
 from typing import Any
 
 import geopandas as gpd
@@ -11,7 +12,8 @@ import pandas as pd
 from affine import Affine
 from pyproj import CRS
 from rasterio.errors import RasterioIOError
-from shapely import MultiLineString, Polygon, unary_union
+from rasterio.features import shapes
+from shapely import MultiLineString, Polygon, from_geojson, unary_union
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge
@@ -252,6 +254,10 @@ class HydraulicModelRun:
         return self.run_dir / f"{self.idx}.mxe"
 
     @property
+    def init_time_path(self) -> Path | None:
+        return self.run_dir / f"{self.idx}.inittm"
+
+    @property
     def mass_file_path(self) -> Path:
         return self.run_dir / f"{self.idx}.mass"
 
@@ -259,7 +265,16 @@ class HydraulicModelRun:
     def mass_table(self) -> pd.DataFrame:
         return pd.read_csv(self.mass_file_path, sep="\\s+")
 
-    def is_converged(self, tolerance: float, method: str = "mean_depth") -> bool:
+    @property
+    def sum_qfix_in(self) -> float:
+        return sum(bc.value for bc in self.boundary_conditions if bc.bc_type == "QFIX")
+
+    def is_converged(
+        self,
+        tolerance: float,
+        method: str = "mean_depth",
+        resolution: float | None = None,
+    ) -> bool:
         wd_files = sorted(self.depth_file_paths)
         if len(wd_files) < 2:
             return False  # Not enough files to compare
@@ -285,7 +300,7 @@ class HydraulicModelRun:
             if avg_depth == 0:
                 return False
             relative_change = max_depth_change / avg_depth
-        elif method == "volume_change":
+        elif method == "volume_change_deprecated":
             # NOTE: LISFLOOD-FP mass file is not filled out when CUDA is enabled
             df = self.mass_table
             vol_series = df["Vol"].values
@@ -293,6 +308,13 @@ class HydraulicModelRun:
                 return False
             dv = np.diff(vol_series)
             relative_change = abs(dv[-1]) / dv.mean()
+        elif method == "volume_change":
+            if resolution is None:
+                raise ValueError("Resolution must be provided for volume_change method")
+            v1 = np.nansum(latest_data[latest_data > 0]) * (resolution**2)
+            v2 = np.nansum(previous_data[previous_data > 0]) * (resolution**2)
+            delta_volume = v1 - v2
+            relative_change = delta_volume / (self.sum_qfix_in * self.save_interval)
 
         return relative_change < tolerance
 
@@ -320,6 +342,24 @@ class HydraulicModelRun:
         d = asdict(self)
         del d["_context"]
         return d
+
+    def inundation_polygon(self, transform: Affine) -> Polygon:
+        """Export the inundated area as a polygon shapefile."""
+        wd_files = sorted(self.depth_file_paths)
+        if not wd_files:
+            raise RuntimeError("No depth files available to export inundation polygon.")
+        latest_file = wd_files[-1]
+
+        depth_data = raster_2_array(latest_file)
+
+        # Convert mask to polygons
+        geoms = shapes(
+            np.ones_like(depth_data), mask=(depth_data > 0), transform=transform
+        )
+
+        return unary_union(
+            [from_geojson(json.dumps(geom)) for geom, value in geoms if value == 1]
+        )
 
 
 @dataclass
@@ -615,6 +655,9 @@ class HydraulicModel:
         else:
             line = self.vectors[bc.geometry_vector]
             pts = domain.geometry_to_bc_points(line.shape)
+
+        if len(pts) == 0:
+            return []  # TODO: think of how to raise an error here
 
         # Build final points with BC info
         if bc.bc_type == "QFIX":
