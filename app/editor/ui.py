@@ -45,9 +45,9 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
         types = []
         values = []
         for i in defaults:
-            geoms_.append(i["geometry_vector"])
-            types.append(i["bc_type"])
-            values.append(i["value"])
+            geoms_.append(i.geometry_vector)
+            types.append(i.bc_type)
+            values.append(i.value)
         bc = pd.DataFrame(
             {
                 "Geometry": geoms_,
@@ -190,7 +190,7 @@ def new_domain(cur_domain: str = ""):
 @st.dialog("Create a vector layer")
 def add_vector():
     """Add a new VectorDataset to the current model."""
-    vector_dir = next(iter(st.session_state["model"].vectors.values())).path.parent
+    vector_dir = st.session_state["model"]._context.model_root / "vectors"
     existing_paths = set([i.path for i in st.session_state["model"].vectors.values()])
     vector_files = list(set(vector_dir.iterdir()).difference(existing_paths))
     opts = [i.stem for i in vector_files]
@@ -456,7 +456,6 @@ def run_executor():
         run_path = str(st.session_state["model"].runs[run_].parfile_path)
         with st.spinner(f"Running Lisflood model at {run_path}"):
             run_model(run_path)
-            st.rerun()
 
 
 def model_editor():
