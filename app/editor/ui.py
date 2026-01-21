@@ -59,8 +59,9 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
     bc["Type"] = bc["Type"].astype(str)
     bc["Value"] = bc["Value"].astype(str)
     geoms = st.session_state["model"].vectors.keys()
+
     ccfg = {
-        "Geometry": st.column_config.SelectboxColumn(options=geoms),
+        "Geometry": st.column_config.SelectboxColumn(options=[k for k in geoms]+["all"]),
         "Type": st.column_config.SelectboxColumn(
             options=["QFIX", "HFIX", "FREE", "TRANSFER"]
         ),
