@@ -23,6 +23,8 @@ services:
       - ./hydrofabric:/hydrofabric
       - ./app:/twodimfim/app
       - ./twodimfim:/twodimfim/twodimfim
+    env_file:
+      - .env
     environment:
       - MODEL_HOST=lisflood-runner
       - MODEL_PORT=5000

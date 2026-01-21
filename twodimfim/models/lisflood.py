@@ -42,10 +42,11 @@ def write_par_file(run: "HydraulicModelRun", domain: "ModelDomain") -> None:
         "sim_time": run.sim_time,
         "initial_tstep": run.initial_tstep,
         "acceleration": "",
-        "elevoff": "",
     }
     if run.use_cuda:
         cfg["cuda"] = ""
+    if run.elevoff:
+        cfg["elevoff"] = ""
     if run.initial_state:
         cfg["startfile"] = str(run.initial_state)
     with open(run.parfile_path, mode="w") as f:

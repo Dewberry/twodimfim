@@ -2,3 +2,4 @@ UID=   # user id, whatever `id -u` returns
 GID=   # group id, whatever `id -g` retur
 
 USE_CUDA=False
+ELEVOFF=False
