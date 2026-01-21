@@ -1,0 +1,45 @@
+services:
+  titiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    container_name: titiler
+    environment:
+      - PORT=8000
+    user: "${UID}:${GID}"
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+
+  streamlit-app:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: streamlit-app
+    user: "${UID}:${GID}"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+      - ./hydrofabric:/hydrofabric
+      - ./app:/twodimfim/app
+      - ./twodimfim:/twodimfim/twodimfim
+    environment:
+      - MODEL_HOST=lisflood-runner
+      - MODEL_PORT=5000
+      - TITILER_DOCKER_SERVICE=titiler
+      - HOST_IP=localhost
+      - TITILER_PORT=8000
+      - MODEL_DIR=/data
+      - HYDROFABRIC_DIR=/hydrofabric
+      - REMOTE_DATA_DIR=/mnt/a/data
+    depends_on:
+      - lisflood-runner
+
+  lisflood-runner:
+    image: lisflood
+    container_name: lisflood-runner
+    ports:
+      - "5000:5000"
+    user: "${UID}:${GID}"
+    volumes:
+      - ./data:/data
