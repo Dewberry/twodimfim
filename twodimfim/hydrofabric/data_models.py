@@ -3,8 +3,17 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
-from shapely import LineString, Polygon, box, clip_by_rect, unary_union
+from shapely import (
+    LineString,
+    MultiPolygon,
+    Point,
+    Polygon,
+    box,
+    clip_by_rect,
+    unary_union,
+)
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import linemerge
 
 from twodimfim.consts import (
     COMMON_CRS,
@@ -16,7 +25,7 @@ from twodimfim.consts import (
     STREAM_ID_PREFIX,
     STREAM_LAYER,
 )
-from twodimfim.errors import MissingReachError
+from twodimfim.errors import DownstreamModelMisalignmentError, MissingReachError
 from twodimfim.utils.geospatial import (
     BBox,
     perpendicular_line,
@@ -54,11 +63,20 @@ class ReachContext:
         geom = (
             gpd.read_file(self.gpkg_path, sql=query).to_crs(self.crs).geometry.iloc[0]
         )
+        geom = linemerge(geom)
         return cast(LineString, geom)
 
     @cached_property
     def walker(self) -> NetworkWalker:
         return NetworkWalker(self.gpkg_path)
+
+    @cached_property
+    def is_headwater(self) -> bool:
+        """Determine if the reach is a headwater (no upstream reaches)."""
+        us = self.walker.network[self.reach_id].us_ms
+        if us == -9999:
+            return True
+        return False
 
     @cached_property
     def divide(self) -> Polygon:
@@ -72,18 +90,26 @@ class ReachContext:
     def us_ms_divide(self) -> Polygon:
         """Upstream divide polygon along mainstem."""
         us_ms_id = DIVIDE_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
-        return self.get_divide(us_ms_id)
+        if us_ms_id == "cat--9999":
+            return None
+        else:
+            return self.get_divide(us_ms_id)
 
     @cached_property
     def us_ms_centerline(self) -> LineString:
         """Upstream divide polygon along mainstem."""
         us_ms_id = STREAM_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
-        return self.get_centerline(us_ms_id)
+        if us_ms_id == "fp--9999":
+            return None
+        else:
+            return self.get_centerline(us_ms_id)
 
     @cached_property
     def all_us_divides(self) -> Polygon:
         """All upstream divides."""
         us_divides = self.walker.walk_network_us(self.reach_id, self.us_ds_walk_dist_km)
+        if len(us_divides) == 0:
+            return None
         us_divides_str = "','".join([DIVIDE_ID_PREFIX + str(i) for i in us_divides])
         query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} in ('{us_divides_str}')"
         geom = (
@@ -108,7 +134,9 @@ class ReachContext:
         )
         return cast(Polygon, geom)
 
-    def export_to_dir(self, export_dir: str | Path, ftype: str = "parquet") -> dict[str, str]:
+    def export_to_dir(
+        self, export_dir: str | Path, ftype: str = "parquet"
+    ) -> dict[str, str]:
         export_dir = Path(export_dir)
         out_dict = {}
 
@@ -121,6 +149,8 @@ class ReachContext:
             "all_ds_divides",
         ]:
             geom = getattr(self, i)
+            if geom is None:
+                continue
             out_path = export_dir / f"{i}.{ftype}"
             self.export_shape(geom, out_path)
             out_dict[i] = str(out_path)
@@ -139,15 +169,44 @@ class ReachContext:
         walk_us_dist_pct: float = 0.25,
         inflow_width: float = 10,
     ):
-        # Walk upstream a bit for u/s boundary condition
-        walk_us_dist = self.us_ms_centerline.length * walk_us_dist_pct
-        us_bc_pt = self.us_ms_centerline.interpolate(1 - walk_us_dist)
-        return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
+        if self.is_headwater:
+            us_bc_pt = Point(self.centerline.coords[0])
+            return perpendicular_line(self.centerline, us_bc_pt, inflow_width)
+        else:
+            # Walk upstream a bit for u/s boundary condition
+            walk_us_dist = self.us_ms_centerline.length * walk_us_dist_pct
+            us_bc_pt = self.us_ms_centerline.interpolate(1 - walk_us_dist)
+            return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
 
     def make_transfer_line(self, bbox: BBox) -> LineString:
-        geom = clip_by_rect(
-            self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
-        )
+        # geom = clip_by_rect(
+        #     self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
+        # )
+        geom = LineString(self.all_ds_divides.exterior.coords)
+        if geom.is_empty:
+            raise DownstreamModelMisalignmentError(
+                "The downstream model's divide does not intersect with the upstream model's bbox."
+            )
+        return cast(LineString, geom)
+
+    def make_transfer_line_offset(self, bbox: BBox, resolution: float) -> LineString:
+        debuff = self.all_ds_divides.buffer(-resolution)
+        if isinstance(debuff, MultiPolygon):
+            debuff = max(debuff.geoms, key=lambda g: g.area)
+        debuff = debuff.exterior
+
+        # geom = clip_by_rect(
+        #     debuff,
+        #     bbox.xmin,
+        #     bbox.ymin,
+        #     bbox.xmax,
+        #     bbox.ymax,
+        # )
+        geom = LineString(debuff.coords)
+        if geom.is_empty:
+            raise DownstreamModelMisalignmentError(
+                "The downstream model's divide does not intersect with the upstream model's bbox."
+            )
         return cast(LineString, geom)
 
     def export_default_domain(
@@ -156,7 +215,8 @@ class ReachContext:
         walk_us_dist_pct: float = 0.25,
         inflow_width: float = 10,
         buffer: float = 100,
-        ftype: str = "parquet"
+        ftype: str = "parquet",
+        resolution: float = 10,
     ) -> dict[str, str]:
         # Export standard elements
         out_dict = self.export_to_dir(export_dir, ftype)
@@ -174,9 +234,20 @@ class ReachContext:
         self.export_shape(bbox_shape, out_path)
         out_dict["bbox"] = str(out_path)
 
-        transfer_line = self.make_transfer_line(bbox)
-        out_path = Path(export_dir) / f"transfer.{ftype}"
-        self.export_shape(transfer_line, out_path)
-        out_dict["transfer"] = str(out_path)
+        try:
+            transfer_line = self.make_transfer_line(bbox)
+            out_path = Path(export_dir) / f"transfer.{ftype}"
+            self.export_shape(transfer_line, out_path)
+            out_dict["transfer"] = str(out_path)
+        except DownstreamModelMisalignmentError:
+            pass
+
+        try:
+            transfer_line_offset = self.make_transfer_line_offset(bbox, resolution)
+            out_path = Path(export_dir) / f"transfer_offset.{ftype}"
+            self.export_shape(transfer_line_offset, out_path)
+            out_dict["transfer_offset"] = str(out_path)
+        except DownstreamModelMisalignmentError:
+            pass
 
         return out_dict

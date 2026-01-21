@@ -9,7 +9,8 @@ from shapely.ops import unary_union
 
 from app.consts import BASE_URL, DATA_DIR, MARKDOWN_DIVIDER
 from app.editor.functions import (
-    make_new_model,
+    make_new_empty_model,
+    make_new_hydrofabric_model,
     pull_from_remote,
     push_to_remote,
     run_model,
@@ -44,9 +45,9 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
         types = []
         values = []
         for i in defaults:
-            geoms_.append(i["geometry_vector"])
-            types.append(i["bc_type"])
-            values.append(i["value"])
+            geoms_.append(i.geometry_vector)
+            types.append(i.bc_type)
+            values.append(i.value)
         bc = pd.DataFrame(
             {
                 "Geometry": geoms_,
@@ -79,13 +80,21 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
 @st.dialog("Create a new model")
 def new_model():
     """Create a new HydraulicModel and store it in session state."""
-    vpu = st.text_input(label="Vector Processing Unit (VPU)", value="1")
-    reach_id = st.number_input(label="Reach ID", step=1)
-    resolution = st.number_input(label="Model Resolution (m)", value=10)
-    inflow_width = st.number_input(label="Inflow Width (m)", value=100)
-    if st.button("Create Model"):
-        make_new_model(vpu, reach_id, resolution, inflow_width)
-        st.rerun()
+    t1, t2 = st.tabs(["From Hydrofabric", "Custom Model"])
+    with t1:
+        vpu = st.text_input(label="Vector Processing Unit (VPU)", value="1")
+        reach_id = st.number_input(label="Reach ID", step=1)
+        resolution = st.number_input(label="Model Resolution (m)", value=10)
+        inflow_width = st.number_input(label="Inflow Width (m)", value=100)
+        if st.button("Create Model", key="hydrofabric_model"):
+            make_new_hydrofabric_model(vpu, reach_id, resolution, inflow_width)
+            st.rerun()
+    with t2:
+        model_id = st.text_input(label="Model ID", value="")
+        crs = st.text_input(label="CRS", value="EPSG:5070")
+        if st.button("Create Model", key="custom_model"):
+            make_new_empty_model(model_id, crs)
+            st.rerun()
 
 
 @st.dialog("Delete model")
@@ -181,7 +190,7 @@ def new_domain(cur_domain: str = ""):
 @st.dialog("Create a vector layer")
 def add_vector():
     """Add a new VectorDataset to the current model."""
-    vector_dir = next(iter(st.session_state["model"].vectors.values())).path.parent
+    vector_dir = st.session_state["model"]._context.model_root / "vectors"
     existing_paths = set([i.path for i in st.session_state["model"].vectors.values()])
     vector_files = list(set(vector_dir.iterdir()).difference(existing_paths))
     opts = [i.stem for i in vector_files]
@@ -447,7 +456,6 @@ def run_executor():
         run_path = str(st.session_state["model"].runs[run_].parfile_path)
         with st.spinner(f"Running Lisflood model at {run_path}"):
             run_model(run_path)
-            st.rerun()
 
 
 def model_editor():

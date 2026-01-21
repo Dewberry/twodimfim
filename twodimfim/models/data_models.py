@@ -3,12 +3,17 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
+from re import S
 from typing import Any
 
 import geopandas as gpd
+import numpy as np
+import pandas as pd
 from affine import Affine
 from pyproj import CRS
-from shapely import MultiLineString, Polygon, unary_union
+from rasterio.errors import RasterioIOError
+from rasterio.features import shapes
+from shapely import MultiLineString, Polygon, from_geojson, unary_union
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge
@@ -34,9 +39,12 @@ from twodimfim.utils.etl import DatasetMetadata, get_nlcd_mannings, get_usgs_dem
 from twodimfim.utils.geospatial import (
     BBox,
     poly_to_edges,
+    raster_2_array,
     rasterize_line,
     sample_raster,
+    sample_wse_from_depth_el,
     snap_bbox_to_grid,
+    water_on_invalid_boundary,
 )
 
 
@@ -210,6 +218,7 @@ class HydraulicModelRun:
     run_dir_stem: str = DEFAULT_RUN_DIR
     parfile_name: str = PAR_FILE
     bcifile_name: str = BCI_FILE
+    use_cuda: bool = True
     _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @classmethod
@@ -232,6 +241,11 @@ class HydraulicModelRun:
         return self.run_dir / self.bcifile_name
 
     @property
+    def depth_file_paths(self) -> Path:
+        paths = self.run_dir.glob(f"{self.idx}-????.wd")
+        return sorted(paths, key=lambda x: int(x.stem.split("-")[1]))
+
+    @property
     def depth_grid_path(self) -> Path:
         return self.run_dir / f"{self.idx}.max"
 
@@ -239,10 +253,113 @@ class HydraulicModelRun:
     def wse_grid_path(self) -> Path:
         return self.run_dir / f"{self.idx}.mxe"
 
+    @property
+    def init_time_path(self) -> Path | None:
+        return self.run_dir / f"{self.idx}.inittm"
+
+    @property
+    def mass_file_path(self) -> Path:
+        return self.run_dir / f"{self.idx}.mass"
+
+    @property
+    def mass_table(self) -> pd.DataFrame:
+        return pd.read_csv(self.mass_file_path, sep="\\s+")
+
+    @property
+    def sum_qfix_in(self) -> float:
+        return sum(bc.value for bc in self.boundary_conditions if bc.bc_type == "QFIX")
+
+    def is_converged(
+        self,
+        tolerance: float,
+        method: str = "mean_depth",
+        resolution: float | None = None,
+    ) -> bool:
+        wd_files = sorted(self.depth_file_paths)
+        if len(wd_files) < 2:
+            return False  # Not enough files to compare
+        latest_file = wd_files[-1]
+        previous_file = wd_files[-2]
+
+        # Read the last time step from both files
+        latest_data = raster_2_array(latest_file)
+        previous_data = raster_2_array(previous_file)
+
+        if method == "mean_depth":
+            # Calculate average depth and average depth change
+            avg_depth = latest_data[latest_data > 0].mean()
+            depth_change = abs(latest_data - previous_data)
+            avg_depth_change = depth_change[latest_data > 0].mean()
+            if avg_depth == 0:
+                return False
+            relative_change = avg_depth_change / avg_depth
+        elif method == "max_depth_change":
+            avg_depth = latest_data[latest_data > 0].mean()
+            depth_change = abs(latest_data - previous_data)
+            max_depth_change = depth_change.max()
+            if avg_depth == 0:
+                return False
+            relative_change = max_depth_change / avg_depth
+        elif method == "volume_change_deprecated":
+            # NOTE: LISFLOOD-FP mass file is not filled out when CUDA is enabled
+            df = self.mass_table
+            vol_series = df["Vol"].values
+            if len(vol_series) < 2:
+                return False
+            dv = np.diff(vol_series)
+            relative_change = abs(dv[-1]) / dv.mean()
+        elif method == "volume_change":
+            if resolution is None:
+                raise ValueError("Resolution must be provided for volume_change method")
+            v1 = np.nansum(latest_data[latest_data > 0]) * (resolution**2)
+            v2 = np.nansum(previous_data[previous_data > 0]) * (resolution**2)
+            delta_volume = v1 - v2
+            relative_change = delta_volume / (self.sum_qfix_in * self.save_interval)
+
+        return relative_change < tolerance
+
+    def water_on_invalid_boundary(self, valid_polygon: Polygon) -> bool:
+        """Check if water is along a boundary that is not allowed."""
+        return any(self.check_water_on_invalid_boundaries(valid_polygon).values())
+
+    def check_water_on_invalid_boundaries(
+        self, valid_polygon: Polygon
+    ) -> dict[str, bool]:
+        """Check if water is along a boundary that is not allowed."""
+        wd_files = sorted(self.depth_file_paths)
+        if not wd_files:
+            return {
+                "north": False,
+                "south": False,
+                "west": False,
+                "east": False,
+            }  # No depth files to check
+        latest_file = wd_files[-1]
+
+        return water_on_invalid_boundary(latest_file, valid_polygon)
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         del d["_context"]
         return d
+
+    def inundation_polygon(self, transform: Affine) -> Polygon:
+        """Export the inundated area as a polygon shapefile."""
+        wd_files = sorted(self.depth_file_paths)
+        if not wd_files:
+            raise RuntimeError("No depth files available to export inundation polygon.")
+        latest_file = wd_files[-1]
+
+        depth_data = raster_2_array(latest_file)
+
+        # Convert mask to polygons
+        geoms = shapes(
+            np.ones_like(depth_data), mask=(depth_data > 0), transform=transform
+        )
+
+        return unary_union(
+            [from_geojson(json.dumps(geom)) for geom, value in geoms if value == 1]
+        )
 
 
 @dataclass
@@ -358,6 +475,14 @@ class ModelDomain:
                 f"Boundary condition was type {geometry.geom_type}, but only Point, LineString, and Polygon are accepted"
             )
 
+    def edges_to_bc_points(self) -> list[list[str | float]]:
+        return [
+            ["N", self.bbox.xmin, self.bbox.xmax],
+            ["S", self.bbox.xmin, self.bbox.xmax],
+            ["W", self.bbox.ymin, self.bbox.ymax],
+            ["E", self.bbox.ymin, self.bbox.ymax],
+        ]
+
     def check_files(self) -> None:
         if self.terrain is None:
             raise RuntimeError(f"No terrain available for domain {self.idx}")
@@ -465,7 +590,7 @@ class HydraulicModel:
                 d["runs"][i]["_context"] = context
         domains = {k: ModelDomain.from_dict(v) for k, v in d["domains"].items()}
         vectors = {k: VectorDataset(**v) for k, v in d["vectors"].items()}
-        runs = {k: HydraulicModelRun(**v) for k, v in d["runs"].items()}
+        runs = {k: HydraulicModelRun.from_dict(v) for k, v in d["runs"].items()}
         connections = {k: ModelConnection(**v) for k, v in d["connections"].items()}
         return cls(metadata, domains, vectors, runs, connections, _context=context)
 
@@ -524,8 +649,17 @@ class HydraulicModel:
     def _process_bc_line(
         self, bc: BoundaryCondition, domain: ModelDomain
     ) -> list[list[str | float]]:
-        line = self.vectors[bc.geometry_vector]
-        pts = domain.geometry_to_bc_points(line.shape)
+        # Get points from geometry
+        if bc.geometry_vector == "all":
+            pts = domain.edges_to_bc_points()
+        else:
+            line = self.vectors[bc.geometry_vector]
+            pts = domain.geometry_to_bc_points(line.shape)
+
+        if len(pts) == 0:
+            return []  # TODO: think of how to raise an error here
+
+        # Build final points with BC info
         if bc.bc_type == "QFIX":
             q_tmp = float(bc.value) / (domain.resolution * len(pts))
             pts = [[*i, "QFIX", q_tmp] for i in pts]
@@ -542,5 +676,12 @@ class HydraulicModel:
         tmp_model = HydraulicModel.from_file(connection.model_path)
         tmp_run = tmp_model.runs[connection.run_id]
         coords = [(float(i[1]), float(i[2])) for i in pts]
-        vals = sample_raster(tmp_run.wse_grid_path, coords)
-        return [[*i, "HFIX", v] for i, v in zip(pts, vals)]
+        try:
+            vals = sample_raster(tmp_run.wse_grid_path, coords)
+        except RasterioIOError:
+            vals = sample_wse_from_depth_el(
+                tmp_model.domains[tmp_run.domain].terrain.path,
+                tmp_run.depth_grid_path,
+                coords,
+            )
+        return [[*i, "HFIX", v] for i, v in zip(pts, vals) if v is not None]

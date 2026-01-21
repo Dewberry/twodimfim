@@ -9,4 +9,5 @@
       }
     },
     "editor.rulers": [80, 120],
+    "editor.formatOnSave": true,
 }

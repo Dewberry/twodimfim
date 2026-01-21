@@ -7,7 +7,7 @@ import geopandas as gpd
 import requests
 from pyproj import Transformer
 
-from app.consts import TITILER_URL
+from app.consts import TITILER_URL_INTERNAL, TITILER_URL_EXTERNAL
 
 
 class OverlayLayer:
@@ -46,7 +46,7 @@ class OverlayLayer:
     @property
     def statistics(self):
         """Fetch min/max statistics from TiTiler."""
-        meta_url = f"{TITILER_URL}/cog/statistics?url={quote(self.url, safe='')}"
+        meta_url = f"{TITILER_URL_INTERNAL}/cog/statistics?url={quote(self.url, safe='')}"
         r = requests.get(meta_url).json()
 
         # Set reasonable defaults if min/max are not available
@@ -77,7 +77,7 @@ class OverlayLayer:
     @property
     def bbox_4326(self):
         """Fetch bounding box from TiTiler."""
-        meta_url = f"{TITILER_URL}/cog/info?url={quote(self.url, safe='')}"
+        meta_url = f"{TITILER_URL_INTERNAL}/cog/info?url={quote(self.url, safe='')}"
         r = requests.get(meta_url).json()
 
         transformer = Transformer.from_crs(
@@ -91,7 +91,7 @@ class OverlayLayer:
     def to_overlay_dict(self):
         """Generate overlay dictionary for map configuration."""
         stats = self.statistics
-        base = f"{TITILER_URL}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
+        base = f"{TITILER_URL_EXTERNAL}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
         url = f"{base}?url={quote(self.url, safe='')}&colormap_name={self.colormap}&rescale={stats['min']},{stats['max']}"
         return {
             "name": self.idx,
