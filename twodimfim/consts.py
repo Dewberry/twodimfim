@@ -50,6 +50,9 @@ MANNINGS_FILE = "mann.ascii"
 BCI_FILE = "bc.bci"
 PAR_FILE = "par.par"
 
+USE_CUDA = os.getenv("USE_CUDA", "True").lower() == "true"
+ELEVOFF = os.getenv("ELEVOFF", "True").lower() == "true"
+
 ### SETTINGS ###
 
 COMMON_CRS = "EPSG:5070"
