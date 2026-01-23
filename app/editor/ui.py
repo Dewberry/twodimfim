@@ -16,6 +16,7 @@ from app.editor.functions import (
     run_model,
     save_model,
 )
+from twodimfim.consts import HYDROFABRIC_DIR
 from twodimfim.models.data_models import (
     BoundaryCondition,
     DatasetMetadata,
@@ -82,12 +83,13 @@ def new_model():
     """Create a new HydraulicModel and store it in session state."""
     t1, t2 = st.tabs(["From Hydrofabric", "Custom Model"])
     with t1:
-        vpu = st.text_input(label="Vector Processing Unit (VPU)", value="1")
+        hf_available = [i for i in HYDROFABRIC_DIR.iterdir() if i.is_file()]
+        hf = st.selectbox(label="Hydrofabric Source", options=hf_available)
         reach_id = st.number_input(label="Reach ID", step=1)
         resolution = st.number_input(label="Model Resolution (m)", value=10)
         inflow_width = st.number_input(label="Inflow Width (m)", value=100)
         if st.button("Create Model", key="hydrofabric_model"):
-            make_new_hydrofabric_model(vpu, reach_id, resolution, inflow_width)
+            make_new_hydrofabric_model(hf.resolve(), reach_id, resolution, inflow_width)
             st.rerun()
     with t2:
         model_id = st.text_input(label="Model ID", value="")

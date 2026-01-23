@@ -529,7 +529,7 @@ class HydraulicModel:
     @classmethod
     def from_hydrofabric(
         cls,
-        vpu: str,
+        gpkg_path: str | Path,
         reach_id: int,
         resolution: float,
         model_root: str | Path,
@@ -546,7 +546,7 @@ class HydraulicModel:
 
         # Populate model geometry files
         vector_dir = context.model_root / DEFAULT_VECTOR_DIR
-        reach_context = ReachContext(vpu, reach_id)
+        reach_context = ReachContext(gpkg_path, reach_id)
         _vectors = reach_context.export_default_domain(
             vector_dir, walk_us_dist_pct, inflow_width, domain_buffer, vector_ftype
         )
@@ -568,7 +568,7 @@ class HydraulicModel:
         # Make metadata
         metadata["title"] = str(reach_id)
         metadata["engineer_notes"] = (
-            f"Initialized from hydrofabric. VPU: {vpu}. Flowpath ID: {reach_id}"
+            f"Initialized from hydrofabric. path: {gpkg_path}. Flowpath ID: {reach_id}"
         )
         meta = HydraulicModelMetadata(**metadata)
 

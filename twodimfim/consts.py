@@ -25,18 +25,40 @@ DEFAULT_RUN_DIR = "runs"
 ### HYDROFABRIC ###
 
 HYDROFABRIC_DIR = Path(os.getenv("HYDROFABRIC_DIR", "/hydrofabric"))
-HYDROFABRIC_BASE_URI = str(HYDROFABRIC_DIR / "{vpu}_commmunity_nextgen.gpkg")
-DIVIDES_LAYER = "divides"
-STREAM_LAYER = "flowpaths"
-TREE_LAYER = "network"
-STREAM_ID_COL = "flowpath_id"
-STREAM_TOID_COL = "flowpath_toid"
-DIVIDE_ID_COL = "divide_id"
-DA_COL = "tot_drainage_areasqkm"
-LENGTH_COL = "flowpath_lengthkm"
-STREAM_ID_PREFIX = "fp-"
-DIVIDE_ID_PREFIX = "cat-"
-DS_ID_PREFIX = "nex-"
+OLD_HF_NETWORK_FORMAT = {
+    "tree_layer": "network",
+    "id_col": "flowpath_id",
+    "from_id_col": "flowpath_id",
+    "to_id_col": "flowpath_toid",
+    "da_col": "tot_drainage_areasqkm",
+    "length_col": "flowpath_lengthkm",
+    "id_prefix": "fp-",
+    "from_id_prefix": "fp-",
+    "to_id_prefix": "nex-",
+    "divides_layer": "divides",
+    "divide_id_col": "divide_id",
+    "divide_id_prefix": "cat-",
+    "stream_layer": "flowpaths",
+    "stream_id_col": "flowpath_id",
+    "stream_id_prefix": "fp-",
+}
+NEW_HF_NETWORK_FORMAT = {
+    "tree_layer": "flowpaths",
+    "id_col": "fp_id",
+    "from_id_col": "up_nex_id",
+    "to_id_col": "dn_nex_id",
+    "da_col": "total_da_sqkm",
+    "length_col": "length_km",
+    "id_prefix": "",
+    "from_id_prefix": "",
+    "to_id_prefix": "",
+    "divides_layer": "divides",
+    "divide_id_col": "div_id",
+    "divide_id_prefix": "",
+    "stream_layer": "flowpaths",
+    "stream_id_col": "fp_id",
+    "stream_id_prefix": "",
+}
 
 ### EXTERNAL URLS ###
 

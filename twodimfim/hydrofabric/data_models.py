@@ -1,6 +1,7 @@
 from functools import cached_property
 from pathlib import Path
-from typing import cast
+from tkinter import NO
+from typing import Literal, cast
 
 import geopandas as gpd
 from shapely import (
@@ -17,15 +18,11 @@ from shapely.ops import linemerge
 
 from twodimfim.consts import (
     COMMON_CRS,
-    DIVIDE_ID_COL,
-    DIVIDE_ID_PREFIX,
-    DIVIDES_LAYER,
-    HYDROFABRIC_BASE_URI,
-    STREAM_ID_COL,
-    STREAM_ID_PREFIX,
-    STREAM_LAYER,
+    NEW_HF_NETWORK_FORMAT,
+    OLD_HF_NETWORK_FORMAT,
 )
 from twodimfim.errors import DownstreamModelMisalignmentError, MissingReachError
+from twodimfim.hydrofabric.utils import get_hf_type
 from twodimfim.utils.geospatial import (
     BBox,
     perpendicular_line,
@@ -33,42 +30,104 @@ from twodimfim.utils.geospatial import (
 from twodimfim.utils.network import NetworkWalker
 
 
-class ReachContext:
-    def __init__(self, vpu: str, reach_id: int, us_ds_walk_dist_km: float = 10) -> None:
-        self.vpu = vpu
-        self.reach_id = reach_id
-        self.us_ds_walk_dist_km = us_ds_walk_dist_km
-        self.stream_id = STREAM_ID_PREFIX + str(reach_id)
-        self.divide_id = DIVIDE_ID_PREFIX + str(reach_id)
-        self.crs = COMMON_CRS
-        self.gpkg_path = HYDROFABRIC_BASE_URI.format(vpu=str(vpu).rjust(2, "0"))
-        self.get_divide(self.divide_id)
+class HF_ACCESS:
+    """Convenient querying of hydrofabric data."""
 
-    def get_divide(self, divide_id: str) -> Polygon:
+    def __init__(self, gpkg_path: str | Path):
+        self.gpkg_path = gpkg_path
+        self.type: Literal["old", "new"] = get_hf_type(gpkg_path)
+        if self.type == "old":
+            self.fmt = OLD_HF_NETWORK_FORMAT
+        else:
+            self.fmt = NEW_HF_NETWORK_FORMAT
+
+    @property
+    def divides_layer(self) -> str:
+        return self.fmt["divides_layer"]
+
+    @property
+    def divide_id_col(self) -> str:
+        return self.fmt["divide_id_col"]
+
+    @property
+    def stream_layer(self) -> str:
+        return self.fmt["stream_layer"]
+
+    @property
+    def stream_id_col(self) -> str:
+        return self.fmt["stream_id_col"]
+
+    @property
+    def divide_id_prefix(self) -> str:
+        return self.fmt["divide_id_prefix"]
+
+    @property
+    def stream_id_prefix(self) -> str:
+        return self.fmt["stream_id_prefix"]
+
+    def get_divide(self, divide_id: int, to_crs: str | None = None) -> Polygon:
+        if self.divide_id_prefix == "":
+            divide_id = f"{divide_id}"
+        else:
+            divide_id = f"'{self.divide_id_prefix}{divide_id}'"
         try:
-            query = (
-                f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} = '{divide_id}'"
-            )
-            geom = (
-                gpd.read_file(self.gpkg_path, sql=query)
-                .to_crs(self.crs)
-                .geometry.iloc[0]
-            )
+            query = f"SELECT * FROM {self.divides_layer} WHERE {self.divide_id_col} = {divide_id}"
+            gdf = gpd.read_file(self.gpkg_path, sql=query)
+            if to_crs is not None:
+                gdf = gdf.to_crs(to_crs)
+            geom = gdf.geometry.iloc[0]
             return cast(Polygon, geom)
         except IndexError:
             raise MissingReachError(f"Could not find a reach with ID {divide_id}")
 
-    def get_centerline(self, stream_id: str) -> LineString:
-        query = f"SELECT * FROM {STREAM_LAYER} WHERE {STREAM_ID_COL} = '{stream_id}'"
-        geom = (
-            gpd.read_file(self.gpkg_path, sql=query).to_crs(self.crs).geometry.iloc[0]
-        )
+    def get_centerline(self, stream_id: int, to_crs: str | None = None) -> LineString:
+        if self.stream_id_prefix == "":
+            stream_id_str = f"{stream_id}"
+        else:
+            stream_id_str = f"'{self.stream_id_prefix}{stream_id}'"
+        query = f"SELECT * FROM {self.stream_layer} WHERE {self.stream_id_col} = {stream_id_str}"
+        gdf = gpd.read_file(self.gpkg_path, sql=query)
+        if to_crs is not None:
+            gdf = gdf.to_crs(to_crs)
+        geom = gdf.geometry.iloc[0]
         geom = linemerge(geom)
         return cast(LineString, geom)
 
+    def get_divides(
+        self, divide_ids: list[str], to_crs: str | None = None
+    ) -> gpd.GeoDataFrame:
+        if self.divide_id_prefix == "":
+            divides_str = "(" + ", ".join([str(i) for i in divide_ids]) + ")"
+        else:
+            divides_str = (
+                "('"
+                + "', '".join([self.divide_id_prefix + str(i) for i in divide_ids])
+                + "')"
+            )
+
+        query = f"SELECT * FROM {self.divides_layer} WHERE {self.divide_id_col} in {divides_str}"
+        gdf = gpd.read_file(self.gpkg_path, sql=query)
+        if to_crs is not None:
+            gdf = gdf.to_crs(to_crs)
+        return gdf
+
+
+class ReachContext:
+    def __init__(
+        self, gpkg_path: str | Path, reach_id: int, us_ds_walk_dist_km: float = 10
+    ) -> None:
+        self.gpkg_path = str(gpkg_path)
+        self.reach_id = reach_id
+        self.us_ds_walk_dist_km = us_ds_walk_dist_km
+        self.stream_id = reach_id
+        self.divide_id = reach_id
+        self.crs = COMMON_CRS
+        self.hf_access = HF_ACCESS(self.gpkg_path)
+        self.hf_access.get_divide(self.divide_id)
+
     @cached_property
     def walker(self) -> NetworkWalker:
-        return NetworkWalker(self.gpkg_path)
+        return NetworkWalker.from_gpkg(self.gpkg_path)
 
     @cached_property
     def is_headwater(self) -> bool:
@@ -80,29 +139,29 @@ class ReachContext:
 
     @cached_property
     def divide(self) -> Polygon:
-        return self.get_divide(self.divide_id)
+        return self.hf_access.get_divide(self.divide_id, to_crs=self.crs)
 
     @cached_property
     def centerline(self) -> LineString:
-        return self.get_centerline(self.stream_id)
+        return self.hf_access.get_centerline(self.stream_id, to_crs=self.crs)
 
     @cached_property
     def us_ms_divide(self) -> Polygon:
         """Upstream divide polygon along mainstem."""
-        us_ms_id = DIVIDE_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
-        if us_ms_id == "cat--9999":
+        us_ms_id = self.walker.network[self.reach_id].us_ms
+        if us_ms_id == -9999:
             return None
         else:
-            return self.get_divide(us_ms_id)
+            return self.hf_access.get_divide(us_ms_id, to_crs=self.crs)
 
     @cached_property
     def us_ms_centerline(self) -> LineString:
         """Upstream divide polygon along mainstem."""
-        us_ms_id = STREAM_ID_PREFIX + str(self.walker.network[self.reach_id].us_ms)
-        if us_ms_id == "fp--9999":
+        us_ms_id = self.walker.network[self.reach_id].us_ms
+        if us_ms_id == -9999:
             return None
         else:
-            return self.get_centerline(us_ms_id)
+            return self.hf_access.get_centerline(us_ms_id, to_crs=self.crs)
 
     @cached_property
     def all_us_divides(self) -> Polygon:
@@ -110,11 +169,9 @@ class ReachContext:
         us_divides = self.walker.walk_network_us(self.reach_id, self.us_ds_walk_dist_km)
         if len(us_divides) == 0:
             return None
-        us_divides_str = "','".join([DIVIDE_ID_PREFIX + str(i) for i in us_divides])
-        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} in ('{us_divides_str}')"
+
         geom = (
-            gpd.read_file(self.gpkg_path, sql=query)
-            .to_crs(self.crs)
+            self.hf_access.get_divides(us_divides, to_crs=self.crs)
             .dissolve()
             .geometry.iloc[0]
         )
@@ -124,11 +181,10 @@ class ReachContext:
     def all_ds_divides(self) -> Polygon:
         """All downstream divides."""
         ds_divides = self.walker.walk_network_ds(self.reach_id, self.us_ds_walk_dist_km)
-        ds_divides_str = "','".join([DIVIDE_ID_PREFIX + str(i) for i in ds_divides])
-        query = f"SELECT * FROM {DIVIDES_LAYER} WHERE {DIVIDE_ID_COL} in ('{ds_divides_str}')"
+        if len(ds_divides) == 0:
+            return None
         geom = (
-            gpd.read_file(self.gpkg_path, sql=query)
-            .to_crs(self.crs)
+            self.hf_access.get_divides(ds_divides, to_crs=self.crs)
             .dissolve()
             .geometry.iloc[0]
         )
@@ -178,10 +234,7 @@ class ReachContext:
             us_bc_pt = self.us_ms_centerline.interpolate(1 - walk_us_dist)
             return perpendicular_line(self.us_ms_centerline, us_bc_pt, inflow_width)
 
-    def make_transfer_line(self, bbox: BBox) -> LineString:
-        # geom = clip_by_rect(
-        #     self.all_ds_divides.exterior, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
-        # )
+    def make_transfer_line(self) -> LineString:
         geom = LineString(self.all_ds_divides.exterior.coords)
         if geom.is_empty:
             raise DownstreamModelMisalignmentError(
@@ -189,19 +242,12 @@ class ReachContext:
             )
         return cast(LineString, geom)
 
-    def make_transfer_line_offset(self, bbox: BBox, resolution: float) -> LineString:
+    def make_transfer_line_offset(self, resolution: float) -> LineString:
         debuff = self.all_ds_divides.buffer(-resolution)
         if isinstance(debuff, MultiPolygon):
             debuff = max(debuff.geoms, key=lambda g: g.area)
         debuff = debuff.exterior
 
-        # geom = clip_by_rect(
-        #     debuff,
-        #     bbox.xmin,
-        #     bbox.ymin,
-        #     bbox.xmax,
-        #     bbox.ymax,
-        # )
         geom = LineString(debuff.coords)
         if geom.is_empty:
             raise DownstreamModelMisalignmentError(
@@ -235,7 +281,7 @@ class ReachContext:
         out_dict["bbox"] = str(out_path)
 
         try:
-            transfer_line = self.make_transfer_line(bbox)
+            transfer_line = self.make_transfer_line()
             out_path = Path(export_dir) / f"transfer.{ftype}"
             self.export_shape(transfer_line, out_path)
             out_dict["transfer"] = str(out_path)
@@ -243,7 +289,7 @@ class ReachContext:
             pass
 
         try:
-            transfer_line_offset = self.make_transfer_line_offset(bbox, resolution)
+            transfer_line_offset = self.make_transfer_line_offset(resolution)
             out_path = Path(export_dir) / f"transfer_offset.{ftype}"
             self.export_shape(transfer_line_offset, out_path)
             out_dict["transfer_offset"] = str(out_path)

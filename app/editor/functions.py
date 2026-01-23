@@ -15,12 +15,12 @@ from twodimfim.models.data_models import (
 
 
 def make_new_hydrofabric_model(
-    vpu: str, reach_id: int, resolution: float, inflow_width: float
+    gpkg_path: str | Path, reach_id: int, resolution: float, inflow_width: float
 ):
     """Create a new HydraulicModel and store it in session state."""
     model_root = Path(DATA_DIR) / str(reach_id)
     st.session_state["model"] = HydraulicModel.from_hydrofabric(
-        vpu,
+        gpkg_path,
         reach_id,
         resolution,
         model_root,
