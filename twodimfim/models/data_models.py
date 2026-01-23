@@ -26,7 +26,9 @@ from twodimfim.consts import (
     DEFAULT_RASTER_DIR,
     DEFAULT_RUN_DIR,
     DEFAULT_VECTOR_DIR,
+    ELEVOFF,
     PAR_FILE,
+    USE_CUDA,
     BCType,
     ModelPathTypes,
     RunType,
@@ -218,7 +220,8 @@ class HydraulicModelRun:
     run_dir_stem: str = DEFAULT_RUN_DIR
     parfile_name: str = PAR_FILE
     bcifile_name: str = BCI_FILE
-    use_cuda: bool = True
+    use_cuda: bool = USE_CUDA
+    elevoff: bool = ELEVOFF
     _context: HydraulicModelContext = field(default_factory=generate_generic_context)
 
     @classmethod
