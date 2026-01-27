@@ -91,8 +91,9 @@ def run_model(run_path):
     try:
         response = requests.post(f"{BASE_URL}/run_model", json={"model_dir": run_path})
         if response.status_code == 200:
-            result = response.json()
+            return True
         else:
             st.error(f"Model API returned {response.status_code}: {response.text}")
     except requests.exceptions.RequestException as e:
         st.error(f"Error connecting to Lisflood API: {e}")
+    return False

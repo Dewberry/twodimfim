@@ -1,4 +1,5 @@
 import json
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import cached_property
@@ -9,7 +10,10 @@ from typing import Any
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rioxarray
+import xarray as xr
 from affine import Affine
+from numcodecs import Blosc
 from pyproj import CRS
 from rasterio.errors import RasterioIOError
 from rasterio.features import shapes
@@ -244,7 +248,7 @@ class HydraulicModelRun:
         return self.run_dir / self.bcifile_name
 
     @property
-    def depth_file_paths(self) -> Path:
+    def depth_file_paths(self) -> list[Path]:
         paths = self.run_dir.glob(f"{self.idx}-????.wd")
         return sorted(paths, key=lambda x: int(x.stem.split("-")[1]))
 
@@ -263,6 +267,10 @@ class HydraulicModelRun:
     @property
     def mass_file_path(self) -> Path:
         return self.run_dir / f"{self.idx}.mass"
+
+    @property
+    def zarr_path(self) -> Path:
+        return self.run_dir / f"{self.idx}_depth.zarr"
 
     @property
     def mass_table(self) -> pd.DataFrame:
@@ -363,6 +371,52 @@ class HydraulicModelRun:
         return unary_union(
             [from_geojson(json.dumps(geom)) for geom, value in geoms if value == 1]
         )
+
+    def export_zarr(self, chunk_xy: int = 512, chunk_time: int = 1) -> None:
+        """Write or append to a Zarr store with the depth time series rasters."""
+        rasters = []
+        for p in self.depth_file_paths:
+            da = rioxarray.open_rasterio(p).squeeze("band", drop=True)
+            da = da.where(da != 0)
+            da = da.astype("float32")
+            rasters.append(da)
+        ds = xr.concat(rasters, dim="time")
+        ds.attrs["_FillValue"] = np.float32(np.nan)
+        ds = ds.assign_coords(time=np.arange(ds.sizes["time"]))
+        ds.name = "depth"
+        ds = ds.chunk(
+            {
+                "time": chunk_time,
+                "x": chunk_xy,
+                "y": chunk_xy,
+            }
+        )
+        compressor = Blosc(cname="zstd", clevel=5, shuffle=Blosc.BITSHUFFLE)
+        encoding = {
+            "depth": {
+                "compressor": compressor,
+                "dtype": "float32",
+                # "_FillValue": np.float32(np.nan),
+            }
+        }
+
+        if self.zarr_path.exists() and self.initial_state is not None:
+            for k in ["add_offset", "scale_factor", "_FillValue", "missing_value"]:
+                ds.attrs.pop(k, None)
+            ds.to_zarr(
+                self.zarr_path,
+                mode="a",
+                append_dim="time",
+            )
+        else:
+            if self.zarr_path.exists():
+                shutil.rmtree(self.zarr_path)
+            ds.to_zarr(
+                self.zarr_path,
+                mode="w",
+                encoding=encoding,
+                zarr_version=2,
+            )
 
 
 @dataclass

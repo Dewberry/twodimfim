@@ -419,7 +419,6 @@ def run_editor():
         with st.container(border=True):
             c1, c2 = st.columns(2)
             with c1:
-                idx = st.text_input("ID", value=r.idx)
                 rtypes = ["Unsteady", "Quasi-steady"]
                 i = rtypes.index(r.run_type.capitalize())
                 rtype = st.selectbox("Run type", rtypes, index=i).lower()
@@ -434,19 +433,52 @@ def run_editor():
                     "Save interval (s)", value=r.save_interval
                 )
                 mass_interval = st.number_input(
-                    "Mass interval (s)", value=r.save_interval
+                    "Mass interval (s)", value=r.mass_interval
                 )
+                sim_time = st.number_input("Simulation time (s)", value=r.sim_time)
                 steady_state_tolerance = (
                     st.number_input(
-                        "Steady state tolerance (%)", value=r.save_interval * 100
+                        "Steady state tolerance (%)",
+                        value=r.steady_state_tolerance * 100,
                     )
                     / 100
                 )
                 initial_tstep = st.number_input(
-                    "Initial timestep (s)", value=r.save_interval
+                    "Initial timestep (s)", value=r.initial_tstep
                 )
             with c2:
                 bcs = bc_maker(r.boundary_conditions)
+                hot_start_opts = [None] + [str(i.name) for i in r.depth_file_paths]
+                if r.initial_state is not None and r.initial_state in hot_start_opts:
+                    hs_idx = hot_start_opts.index(Path(r.initial_state).name)
+                else:
+                    hs_idx = 0
+                hot_start = st.selectbox(
+                    "Hot start",
+                    options=hot_start_opts,
+                    index=hs_idx,
+                )
+                if st.button("Save run", use_container_width=True, type="primary"):
+                    r.run_type = rtype
+                    r.domain = domain
+                    r.save_interval = save_interval
+                    r.mass_interval = mass_interval
+                    r.sim_time = sim_time
+                    r.steady_state_tolerance = steady_state_tolerance
+                    r.initial_tstep = initial_tstep
+                    bcs_refactor = [
+                        BoundaryCondition(
+                            geometry_vector=i.Geometry, bc_type=i.Type, value=i.Value
+                        )
+                        for i in bcs.itertuples()
+                    ]
+                    r.boundary_conditions = bcs_refactor
+                    if hot_start is not None:
+                        r.initial_state = str(r.run_dir / hot_start)
+                    else:
+                        r.initial_state = None
+                    st.session_state["model"].add_run(r)
+                    st.session_state["model"].save()
 
 
 def run_executor():
@@ -456,9 +488,13 @@ def run_executor():
         run_ = st.selectbox("Select a run", runs, index=0, key="rexec")
         exec_run = st.button("Execute run")
     if exec_run:
-        run_path = str(st.session_state["model"].runs[run_].parfile_path)
+        run = st.session_state["model"].runs[run_]
+        run_path = str(run.parfile_path)
         with st.spinner(f"Running Lisflood model at {run_path}"):
-            run_model(run_path)
+            success = run_model(run_path)
+            if success:
+                run.export_zarr()
+                st.rerun()
 
 
 def model_editor():
