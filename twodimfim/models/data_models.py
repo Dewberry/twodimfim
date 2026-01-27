@@ -684,7 +684,7 @@ class HydraulicModel:
         except RasterioIOError:
             vals = sample_wse_from_depth_el(
                 tmp_model.domains[tmp_run.domain].terrain.path,
-                tmp_run.depth_grid_path,
+                tmp_run.depth_file_paths[-1],
                 coords,
             )
         return [[*i, "HFIX", v] for i, v in zip(pts, vals) if v is not None]
