@@ -197,22 +197,28 @@ def add_vector():
     """Add a new VectorDataset to the current model."""
     vector_dir = st.session_state["model"]._context.model_root / "vectors"
     existing_paths = set([i.path for i in st.session_state["model"].vectors.values()])
-    vector_files = list(set(vector_dir.iterdir()).difference(existing_paths))
-    opts = [i.stem for i in vector_files]
+    opts = [i.name for i in vector_dir_list(vector_dir) if i not in existing_paths]
     geom = st.selectbox("Geometry", options=opts)
     ds_src = st.text_input("Describe data original source")
     mods = st.text_input("Describe any manipulation done to the source dataset")
     if st.button("Add geometry", disabled=ds_src == ""):
-        i = opts.index(geom)
-        idx = geom
+        idx = geom.split(".")[0]
         meta = DatasetMetadata(
             "file", ds_src, transformations=[f"user_modifications: {mods}"]
         )
-        stem = str(
-            vector_files[i].relative_to(st.session_state["model"]._context.model_root)
-        )
+        stem = str(vector_dir / geom)
         geom = VectorDataset(idx, stem, meta, st.session_state["model"]._context)
         st.session_state["model"].vectors[idx] = geom
+        st.session_state["model"].save()
+        st.rerun()
+
+
+def vector_dir_list(path: Path) -> list[Path]:
+    """List all vector files in a directory."""
+    vector_files = []
+    for ext in [".shp", ".geojson", ".gpkg", ".parquet"]:
+        vector_files.extend(list(path.glob(f"*{ext}")))
+    return vector_files
 
 
 @st.dialog("Create a connection")
