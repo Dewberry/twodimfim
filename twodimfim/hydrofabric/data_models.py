@@ -1,6 +1,5 @@
 from functools import cached_property
 from pathlib import Path
-from tkinter import NO
 from typing import Literal, cast
 
 import geopandas as gpd
@@ -10,7 +9,6 @@ from shapely import (
     Point,
     Polygon,
     box,
-    clip_by_rect,
     unary_union,
 )
 from shapely.geometry.base import BaseGeometry
@@ -92,6 +90,24 @@ class HF_ACCESS:
         geom = gdf.geometry.iloc[0]
         geom = linemerge(geom)
         return cast(LineString, geom)
+
+    def get_flowpaths(
+        self, flowpath_ids: list[str], to_crs: str | None = None
+    ) -> gpd.GeoDataFrame:
+        if self.stream_id_prefix == "":
+            flowpaths_str = "(" + ", ".join([str(i) for i in flowpath_ids]) + ")"
+        else:
+            flowpaths_str = (
+                "('"
+                + "', '".join([self.stream_id_prefix + str(i) for i in flowpath_ids])
+                + "')"
+            )
+
+        query = f"SELECT * FROM {self.stream_layer} WHERE {self.stream_id_col} in {flowpaths_str}"
+        gdf = gpd.read_file(self.gpkg_path, sql=query)
+        if to_crs is not None:
+            gdf = gdf.to_crs(to_crs)
+        return gdf
 
     def get_divides(
         self, divide_ids: list[str], to_crs: str | None = None
