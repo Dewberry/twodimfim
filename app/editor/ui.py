@@ -446,10 +446,14 @@ def run_editor():
                     "Mass interval (s)", value=r.mass_interval
                 )
                 sim_time = st.number_input("Simulation time (s)", value=r.sim_time)
+                if r.steady_state_tolerance is not None:
+                    def_ss = r.steady_state_tolerance * 100
+                else:
+                    def_ss = 0.0
                 steady_state_tolerance = (
                     st.number_input(
                         "Steady state tolerance (%)",
-                        value=r.steady_state_tolerance * 100,
+                        value=def_ss,
                     )
                     / 100
                 )
@@ -468,6 +472,7 @@ def run_editor():
                     options=hot_start_opts,
                     index=hs_idx,
                 )
+                elevoff = not st.checkbox("Export Elevations", value=not r.elevoff)
                 if st.button("Save run", use_container_width=True, type="primary"):
                     r.run_type = rtype
                     r.domain = domain
@@ -476,6 +481,7 @@ def run_editor():
                     r.sim_time = sim_time
                     r.steady_state_tolerance = steady_state_tolerance
                     r.initial_tstep = initial_tstep
+                    r.elevoff = elevoff
                     bcs_refactor = [
                         BoundaryCondition(
                             geometry_vector=i.Geometry, bc_type=i.Type, value=i.Value
