@@ -88,15 +88,15 @@ def perpendicular_line(
     return LineString([p_left, p_right])
 
 
-def rasterize_line(
-    line: LineString, rows: int, cols: int, transform: Affine
+def rasterize_geometry(
+    geometry: BaseGeometry, rows: int, cols: int, transform: Affine
 ) -> list[tuple[float, float]]:
     # Create an empty mask
     mask = np.zeros((rows, cols), dtype=np.uint8)
 
     # Rasterize the line geometry into the mask
     rasterio.features.rasterize(
-        [(line, 1)],
+        [(geometry, 1)],
         out=mask,
         transform=transform,
         all_touched=True,
@@ -204,6 +204,29 @@ def water_on_invalid_boundary(raster_path: str | Path, valid_polygon: Polygon) -
         all_touched=True,
         dtype="uint8",
     )
+
+    ### DEBUG TEMP EXPORT POLYGON TO parquet ###
+    # import geopandas as gpd
+
+    # gpd.GeoDataFrame(geometry=[valid_polygon], crs="EPSG:5070").to_parquet(
+    #     "debug_valid_polygon.parquet"
+    # )
+    # #############################################
+
+    # ### DEBUG TEMP EXPORT MASK TO RASTER TIF ###
+    # with rasterio.open(
+    #     "debug_valid_mask.tif",
+    #     "w",
+    #     driver="GTiff",
+    #     height=valid_mask.shape[0],
+    #     width=valid_mask.shape[1],
+    #     count=1,
+    #     dtype=valid_mask.dtype,
+    #     crs="EPSG:5070",
+    #     transform=transform,
+    # ) as dst:
+    #     dst.write(valid_mask, 1)
+    #############################################
 
     # Identify water cells (assuming water depth > 0.01 indicates water presence)
     water_mask = data > 0.01

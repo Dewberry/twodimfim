@@ -520,10 +520,10 @@ class ModelDomain:
             return [["P", geometry.x, geometry.y]]
         elif isinstance(geometry, MultiLineString):
             geometry = linemerge(geometry)
-            pts = rasterize_line(geometry, self.rows, self.cols, self.transform)
+            pts = rasterize_geometry(geometry, self.rows, self.cols, self.transform)
             return [["P", i[0], i[1]] for i in pts]
         elif isinstance(geometry, LineString):
-            pts = rasterize_line(geometry, self.rows, self.cols, self.transform)
+            pts = rasterize_geometry(geometry, self.rows, self.cols, self.transform)
             return [["P", i[0], i[1]] for i in pts]
         elif isinstance(geometry, Polygon):
             return poly_to_edges(geometry, self.bbox)
