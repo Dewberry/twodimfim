@@ -209,3 +209,10 @@ __marimo__/
 
 # Data
 data/
+data_copy/
+hydrofabric/
+inundation_polygons/
+steady_state/
+
+# Dev
+dev/
