@@ -528,6 +528,9 @@ class ModelDomain:
             return [["P", i[0], i[1]] for i in pts]
         elif isinstance(geometry, Polygon):
             return poly_to_edges(geometry, self.bbox)
+        elif isinstance(geometry, MultiPolygon):
+            geometry = unary_union(geometry)
+            return poly_to_edges(geometry, self.bbox)
         else:
             raise RuntimeError(
                 f"Boundary condition was type {geometry.geom_type}, but only Point, LineString, and Polygon are accepted"
