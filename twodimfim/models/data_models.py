@@ -17,7 +17,7 @@ from numcodecs import Blosc
 from pyproj import CRS
 from rasterio.errors import RasterioIOError
 from rasterio.features import shapes
-from shapely import MultiLineString, Polygon, from_geojson, unary_union
+from shapely import MultiLineString, MultiPolygon, Polygon, from_geojson, unary_union
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge
@@ -46,7 +46,7 @@ from twodimfim.utils.geospatial import (
     BBox,
     poly_to_edges,
     raster_2_array,
-    rasterize_line,
+    rasterize_geometry,
     sample_raster,
     sample_wse_from_depth_el,
     snap_bbox_to_grid,
