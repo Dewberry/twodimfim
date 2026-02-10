@@ -250,7 +250,7 @@ class HydraulicModelRun:
     @property
     def depth_file_paths(self) -> list[Path]:
         paths = self.run_dir.glob(f"{self.idx}-????.wd")
-        return sorted(paths, key=lambda x: int(x.stem.split("-")[1]))
+        return sorted(paths, key=lambda x: int(x.stem[-4:]))
 
     @property
     def depth_grid_path(self) -> Path:
