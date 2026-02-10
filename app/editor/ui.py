@@ -407,7 +407,9 @@ def connection_editor():
 
     # Edit dialog
     if cnx_ is not None:
-        st.text(f"{cnx_}")
+        c = st.session_state["model"].connections[cnx_]
+        text = f"**ID**: {c.idx}\n\n**Model Path**: {c.model_path}\n\n**Run ID**: {c.run_id}\n\n"
+        st.markdown(text)
 
 
 def run_editor():
