@@ -62,7 +62,9 @@ def bc_maker(defaults: list[dict] | None = None, editable: bool = True):
     geoms = st.session_state["model"].vectors.keys()
 
     ccfg = {
-        "Geometry": st.column_config.SelectboxColumn(options=[k for k in geoms]+["all"]),
+        "Geometry": st.column_config.SelectboxColumn(
+            options=[k for k in geoms] + ["all"]
+        ),
         "Type": st.column_config.SelectboxColumn(
             options=["QFIX", "HFIX", "FREE", "TRANSFER"]
         ),
