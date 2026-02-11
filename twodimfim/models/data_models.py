@@ -250,7 +250,9 @@ class HydraulicModelRun:
     @property
     def depth_file_paths(self) -> list[Path]:
         paths = self.run_dir.glob(f"{self.idx}-????.wd")
-        return sorted(paths, key=lambda x: int(x.stem[-4:]))
+        paths = sorted(paths, key=lambda x: int(x.stem[-4:]))
+        target_count = self.sim_time // self.save_interval
+        return paths[: target_count + 1]
 
     @property
     def depth_grid_path(self) -> Path:
@@ -375,8 +377,7 @@ class HydraulicModelRun:
     def export_zarr(self, chunk_xy: int = 512, chunk_time: int = 1) -> None:
         """Write or append to a Zarr store with the depth time series rasters."""
         rasters = []
-        target_count = self.sim_time // self.save_interval
-        for p in self.depth_file_paths[: target_count + 1]:
+        for p in self.depth_file_paths:
             da = rioxarray.open_rasterio(p).squeeze("band", drop=True)
             da = da.where(da != 0)
             da = da.astype("float32")
