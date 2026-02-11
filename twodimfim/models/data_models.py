@@ -44,8 +44,8 @@ from twodimfim.models.lisflood import write_bci_file, write_par_file
 from twodimfim.utils.etl import DatasetMetadata, get_nlcd_mannings, get_usgs_dem
 from twodimfim.utils.geospatial import (
     BBox,
+    Raster,
     poly_to_edges,
-    raster_2_array,
     rasterize_geometry,
     sample_raster,
     sample_wse_from_depth_el,
@@ -293,8 +293,8 @@ class HydraulicModelRun:
         previous_file = wd_files[-2]
 
         # Read the last time step from both files
-        latest_data = raster_2_array(latest_file)
-        previous_data = raster_2_array(previous_file)
+        latest_data = Raster(latest_file).data
+        previous_data = Raster(previous_file).data
 
         if method == "mean_depth":
             # Calculate average depth and average depth change
@@ -361,7 +361,7 @@ class HydraulicModelRun:
             raise RuntimeError("No depth files available to export inundation polygon.")
         latest_file = wd_files[-1]
 
-        depth_data = raster_2_array(latest_file)
+        depth_data = Raster(latest_file).data
 
         # Convert mask to polygons
         geoms = shapes(

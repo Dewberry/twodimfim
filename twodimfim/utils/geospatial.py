@@ -4,6 +4,7 @@ from math import ceil, floor
 from pathlib import Path
 from typing import Iterator
 
+import geopandas as gpd
 import numpy as np
 import pyproj
 import pyproj.datadir
@@ -11,9 +12,11 @@ import rasterio.features
 import rasterio.transform
 from affine import Affine
 from pyproj import Transformer
-from shapely import LineString, Point, Polygon, box
+from scipy.ndimage import gaussian_filter
+from shapely import LineString, MultiLineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+from skimage import measure
 
 # Seems to fix an issue where transforms were all going infinite?
 pyproj.__version__
@@ -47,6 +50,23 @@ class BBox:
     @property
     def height(self) -> float:
         return self.ymax - self.ymin
+
+
+class Raster:
+    def __init__(self, raster_path: str | Path):
+        self.raster_path = raster_path
+        with rasterio.open(raster_path) as src:
+            self.transform = src.transform
+            self.nodata = src.nodata
+            self.profile = src.profile
+            self.height = src.height
+            self.width = src.width
+
+    @property
+    def data(self) -> np.array:
+        with rasterio.open(self.raster_path) as src:
+            data = src.read(1)
+        return data
 
 
 def snap_bbox_to_grid(bbox: BBox, resolution: float) -> BBox:
@@ -142,11 +162,8 @@ def poly_to_edges(poly: Polygon, bbox: BBox) -> list[list[str | float]]:
 def sample_raster(
     raster_path: str | Path, points: list[tuple[float, float]]
 ) -> list[float]:
-    with rasterio.open(raster_path) as src:
-        arr = src.read(1)
-        transform = src.transform
-
-    inv = ~transform
+    r = Raster(raster_path)
+    inv = ~r.transform
     x_ind, y_ind = zip(*[inv * (x, y) for x, y in points])
     x_ind = np.floor(x_ind).astype(int)
     y_ind = np.floor(y_ind).astype(int)
@@ -154,14 +171,14 @@ def sample_raster(
     ### DEBUG ###
     # In production, this case should not happen.
     # If this happens in productions, it indicates that the current reach abuts more than it's next d/s reach
-    x_mask = (np.array(x_ind) < 0) | (np.array(x_ind) >= arr.shape[1])
-    y_mask = (np.array(y_ind) < 0) | (np.array(y_ind) >= arr.shape[0])
+    x_mask = (np.array(x_ind) < 0) | (np.array(x_ind) >= r.data.shape[1])
+    y_mask = (np.array(y_ind) < 0) | (np.array(y_ind) >= r.data.shape[0])
     total_mask = x_mask | y_mask
     x_ind = x_ind[~total_mask]
     y_ind = y_ind[~total_mask]
 
     out = np.full(len(points), np.nan)
-    out[~total_mask] = arr[y_ind, x_ind]
+    out[~total_mask] = r.data[y_ind, x_ind]
 
     return [i if not np.isnan(i) else None for i in out]
 
@@ -182,57 +199,25 @@ def sample_wse_from_depth_el(
     return vals
 
 
-def raster_2_array(file_path: Path | str) -> np.ndarray:
-    """Load a raster file and return its data as a NumPy array."""
-    with rasterio.open(file_path) as src:
-        data = src.read(1)
-    return data
-
-
 def water_on_invalid_boundary(raster_path: str | Path, valid_polygon: Polygon) -> bool:
     """Check if water is along a boundary that is not allowed."""
     # Load raster data and rasterize the valid polygon
-    with rasterio.open(raster_path) as src:
-        data = src.read(1)
-        transform = src.transform
-        out_shape = (src.height, src.width)
+    r = Raster(raster_path)
+    out_shape = (r.height, r.width)
     valid_mask = rasterio.features.rasterize(
         [(valid_polygon, 1)],
         out_shape=out_shape,
-        transform=transform,
+        transform=r.transform,
         fill=0,
         all_touched=True,
         dtype="uint8",
     )
 
-    ### DEBUG TEMP EXPORT POLYGON TO parquet ###
-    # import geopandas as gpd
-
-    # gpd.GeoDataFrame(geometry=[valid_polygon], crs="EPSG:5070").to_parquet(
-    #     "debug_valid_polygon.parquet"
-    # )
-    # #############################################
-
-    # ### DEBUG TEMP EXPORT MASK TO RASTER TIF ###
-    # with rasterio.open(
-    #     "debug_valid_mask.tif",
-    #     "w",
-    #     driver="GTiff",
-    #     height=valid_mask.shape[0],
-    #     width=valid_mask.shape[1],
-    #     count=1,
-    #     dtype=valid_mask.dtype,
-    #     crs="EPSG:5070",
-    #     transform=transform,
-    # ) as dst:
-    #     dst.write(valid_mask, 1)
-    #############################################
-
     # Identify water cells (assuming water depth > 0.01 indicates water presence)
-    water_mask = data > 0.01
+    water_mask = r.data > 0.01
 
     # Create a boundary mask
-    boundary_mask = np.zeros_like(data, dtype=bool)
+    boundary_mask = np.zeros_like(r.data, dtype=bool)
     boundary_mask[0, :] = True  # Top row
     boundary_mask[-1, :] = True  # Bottom row
     boundary_mask[:, 0] = True  # Left column
@@ -248,3 +233,112 @@ def water_on_invalid_boundary(raster_path: str | Path, valid_polygon: Polygon) -
         "west": np.any(invalid_boundary_mask[:, 0]),
         "east": np.any(invalid_boundary_mask[:, -1]),
     }
+
+
+def nan_smooth(data: np.array, sigma: int = 3):
+    nan_mask = np.isnan(data)
+    data[nan_mask] = 0
+    w = np.ones_like(data)
+    w[nan_mask] = 0
+    v_filtered = gaussian_filter(data, sigma=sigma)
+    w_filtered = gaussian_filter(w, sigma=sigma)
+    return v_filtered / w_filtered
+
+
+def smooth_raster_data(data: np.array, pad_fraction: float = 0.25) -> np.array:
+    # Pad out to avoid edge effects
+    nrows, ncols = data.shape
+    pad_rows = int(np.ceil(nrows * pad_fraction))
+    pad_cols = int(np.ceil(ncols * pad_fraction))
+    data = np.pad(
+        data,
+        pad_width=((pad_rows, pad_rows), (pad_cols, pad_cols)),
+        mode="constant",
+        constant_values=np.nan,
+    )
+
+    # Log valid data mask
+    nan_mask = np.isnan(data)
+
+    # Smooth
+    smoothed = data.copy()
+
+    # Initial coarse smooth to get downvalley gradient in nodata areas
+    s = max(3, min(data.shape) // 4)
+    smoothed = nan_smooth(smoothed, s)
+
+    # Fine scale smooth (smooth out noise)
+    smoothed[~nan_mask] = data[~nan_mask]  # Impute original non smooth values
+    smoothed = nan_smooth(smoothed, 3)
+
+    # Coarse smooth to reflect macro trends ()
+    s = max(3, min(data.shape) // 20)
+    smoothed = nan_smooth(smoothed, s)
+
+    # reset pad
+    smoothed = smoothed[pad_rows : pad_rows + nrows, pad_cols : pad_cols + ncols]
+
+    return smoothed
+
+
+def extract_contour(
+    wse: np.array, pt: Point, wse_transform: Affine
+) -> [MultiLineString, float]:
+    # Get sample ind
+    y_ind, x_ind = ~wse_transform * (pt.x, pt.y)
+    x_ind = np.floor(x_ind).astype(int)
+    y_ind = np.floor(y_ind).astype(int)
+    contour_val = wse[x_ind, y_ind]
+
+    # Make line
+    contours = measure.find_contours(wse, level=contour_val)
+    lines = []
+    for c in contours:
+        # c is (row, col) in pixel coordinates
+        rows, cols = c[:, 0], c[:, 1]
+        xs, ys = rasterio.transform.xy(wse_transform, rows, cols, offset="center")
+        line = LineString(zip(xs, ys))
+        if line.length > 0:
+            lines.append(line)
+
+    return MultiLineString(lines), contour_val
+
+
+def export_wse_contour(
+    dem_path: str | Path,
+    depth_path: str | Path,
+    wse_pt: Point,
+    countour_path: str | Path,
+    smoothed_raster_path: str | Path | None = None,
+    clip_poly: Polygon | None = None,
+    **kwargs,
+):
+    # Generate WSE grid
+    dem = Raster(dem_path)
+    depth = Raster(depth_path)
+
+    inun_mask = (depth.data == depth.nodata) | (depth.data <= 0)
+    clean_depth = np.where(inun_mask, np.nan, depth.data)
+
+    wse_data = dem.data + clean_depth
+
+    # Smooth and export
+    smooth_wse = smooth_raster_data(wse_data, **kwargs)
+    if smoothed_raster_path is not None:
+        with rasterio.open(smoothed_raster_path, "w", **depth.profile) as src:
+            src.write(smooth_wse, 1)
+
+    # Extract contour
+    contour, wse_val = extract_contour(smooth_wse, wse_pt, dem.transform)
+    if clip_poly is not None:
+        contour = contour.intersection(clip_poly)
+
+    gdf = gpd.GeoDataFrame(
+        {"wse": [wse_val]},
+        geometry=[contour],
+        crs=dem.profile["crs"],
+    )
+    if str(countour_path).endswith(".parquet"):
+        gdf.to_parquet(countour_path)
+    else:
+        gdf.to_file(countour_path)
