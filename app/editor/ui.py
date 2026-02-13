@@ -147,7 +147,7 @@ def new_run():
     with st.expander("Additional parameters"):
         save_interval = st.number_input("Save Interval", value=900)
         mass_interval = st.number_input("Mass Interval", value=15)
-        sim_time = st.number_input("Simulation Time", value=3600)
+        sim_time = st.number_input("Simulation Time", value=12000)
         steady_state_tolerance = st.number_input("Steady State Tolerance", value=0.95)
         initial_tstep = st.number_input("Initial Timestep", value=0.5)
 
