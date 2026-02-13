@@ -746,8 +746,10 @@ class HydraulicModel:
         }
 
     def to_file(self, out_path: str | Path) -> None:
+        d = self.to_dict()
+        json.dumps(d, indent=4)  # test that it can be serialized before writing to file
         with open(out_path, mode="w") as f:
-            json.dump(self.to_dict(), f, indent=4)
+            json.dump(d, f, indent=4)
 
     def save(self) -> None:
         out_path = self._context.model_root / DEFAULT_MODEL_PATH_NAME
