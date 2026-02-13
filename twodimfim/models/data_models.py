@@ -17,7 +17,14 @@ from numcodecs import Blosc
 from pyproj import CRS
 from rasterio.errors import RasterioIOError
 from rasterio.features import shapes
-from shapely import MultiLineString, MultiPolygon, Polygon, from_geojson, unary_union
+from shapely import (
+    MultiLineString,
+    MultiPolygon,
+    Polygon,
+    from_geojson,
+    line_interpolate_point,
+    unary_union,
+)
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge
@@ -42,9 +49,11 @@ from twodimfim.consts import (
 from twodimfim.hydrofabric.data_models import ReachContext
 from twodimfim.models.lisflood import write_bci_file, write_par_file
 from twodimfim.utils.etl import DatasetMetadata, get_nlcd_mannings, get_usgs_dem
+from twodimfim.utils.geomorphology import bieger_bankfull_width
 from twodimfim.utils.geospatial import (
     BBox,
     Raster,
+    export_wse_contour,
     poly_to_edges,
     rasterize_geometry,
     sample_raster,
@@ -601,6 +610,9 @@ class HydraulicModel:
         crs: str = COMMON_CRS,
         metadata: dict = {},
         vector_ftype: str = "parquet",
+        ds_run: str | None = None,
+        bkf_multiplier: float = 10.0,
+        use_divide: bool = False,
     ):
         # Initialize model directory
         context = HydraulicModelContext(Path(model_root), CRS.from_user_input(crs))
@@ -609,21 +621,83 @@ class HydraulicModel:
         # Populate model geometry files
         vector_dir = context.model_root / DEFAULT_VECTOR_DIR
         reach_context = ReachContext(gpkg_path, reach_id)
+        bkf = bieger_bankfull_width(reach_context.walker.network[reach_id].da)
         _vectors = reach_context.export_default_domain(
-            vector_dir, walk_us_dist_pct, inflow_width, domain_buffer, vector_ftype
+            vector_dir, walk_us_dist_pct, bkf, vector_ftype
         )
         std_meta = DatasetMetadata("file", reach_context.gpkg_path)
-        vectors = {}
+        vectors: dict[str, VectorDataset] = {}
         for k, v in _vectors.items():
             vectors[k] = VectorDataset(
                 k, str(Path(v).relative_to(context.model_root)), std_meta, context
             )
 
+        # Optional add connection to d/s reach
+        if ds_run is not None:
+            ds_reach = int(reach_context.walker.network[reach_id].ds)
+            ds_model_path = context.model_root.parent / str(ds_reach) / "model.json"
+
+            ds_model = HydraulicModel.from_file(ds_model_path)
+            connections = {ds_run: ModelConnection(ds_run, ds_model_path, ds_run)}
+
+            cnx_vector_meta = DatasetMetadata("file", str(ds_model_path))
+
+            inun_poly_name = f"{ds_reach}_{ds_run}_inundation_poly"
+            inun_path = vector_dir / f"{inun_poly_name}.{vector_ftype}"
+            ds_model.export_inundation_polygon(ds_run, inun_path)
+            vectors[inun_poly_name] = VectorDataset(
+                inun_poly_name,
+                str(inun_path.relative_to(context.model_root)),
+                cnx_vector_meta,
+                context,
+            )
+
+            stl_name = f"{ds_reach}_{ds_run}_stl"
+            stl_path = vector_dir / f"{stl_name}.{vector_ftype}"
+            ds_model.export_stl(ds_run, stl_path)
+            vectors[stl_name] = VectorDataset(
+                stl_name,
+                str(stl_path.relative_to(context.model_root)),
+                cnx_vector_meta,
+                context,
+            )
+        else:
+            connections = {}
+
         # Make model domain
-        base_bbox = BBox(
-            *unary_union([vectors["divide"].shape, vectors["us_bc_line"].shape]).bounds
-        )
+        if use_divide:
+            vecs = [vectors["divide"].shape, vectors["us_bc_line"].shape]
+        else:
+            cl_buffer = vectors["centerline"].shape.buffer(
+                bkf * bkf_multiplier, cap_style="flat"
+            )
+            cl_buffer_path = (
+                context.model_root / DEFAULT_VECTOR_DIR / f"cl_buffer.{vector_ftype}"
+            )
+            gpd.GeoDataFrame(
+                {"id": [1]}, geometry=[cl_buffer], crs=context.crs
+            ).to_file(cl_buffer_path)
+            vectors["cl_buffer"] = VectorDataset(
+                "cl_buffer",
+                str((cl_buffer_path).relative_to(context.model_root)),
+                std_meta,
+                context,
+            )
+            vecs = [cl_buffer, vectors["us_bc_line"].shape]
+            if ds_run is not None:
+                vecs.append(vectors[stl_name].shape)
+        base_bbox = BBox(*unary_union(vecs).bounds)
         base_bbox.buffer(domain_buffer)
+        domain_path = context.model_root / DEFAULT_VECTOR_DIR / f"domain.{vector_ftype}"
+        gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[base_bbox.shape], crs=context.crs
+        ).to_file(domain_path)
+        vectors["model_domain"] = VectorDataset(
+            "model_domain",
+            str((domain_path).relative_to(context.model_root)),
+            std_meta,
+            context,
+        )
         idx = f"hydrofabric_res_{str(resolution)}"
         domains = {idx: ModelDomain.from_bbox(idx, base_bbox, resolution, context)}
 
@@ -635,7 +709,7 @@ class HydraulicModel:
         meta = HydraulicModelMetadata(**metadata)
 
         # Make model
-        return cls(meta, domains, vectors, _context=context)
+        return cls(meta, domains, vectors, connections=connections, _context=context)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]):
@@ -699,6 +773,81 @@ class HydraulicModel:
     def add_connection(self, idx: str, model_path: str | Path, run_id: str) -> None:
         cnx = ModelConnection(idx, Path(model_path), run_id)
         self.connections[idx] = cnx
+
+    def export_inundation_polygon(self, run_id: str, save_path: str | Path) -> None:
+        run = self.runs[run_id]
+        domain = self.domains[run.domain]
+        transform = domain.transform
+        poly = run.inundation_polygon(transform)
+        gdf = gpd.GeoDataFrame({"geometry": [poly]}, crs=domain.crs)
+        if save_path.suffix == ".parquet":
+            gdf.to_parquet(save_path)
+        else:
+            gdf.to_file(save_path)
+
+    def import_connection_inun_poly(
+        self, cnx_idx: str, f_type: str = "parquet"
+    ) -> None:
+        # Load dd/s model
+        cnx = self.connections[cnx_idx]
+        tmp_model = HydraulicModel.from_file(cnx.model_path)
+
+        # Export inundation polygon
+        poly_name = f"{tmp_model.metadata.title}_{cnx.idx}_inundation_poly"
+        vector_dir = self._context.model_root / DEFAULT_VECTOR_DIR
+        save_path = vector_dir / f"{poly_name}.{f_type}"
+        tmp_model.export_inundation_polygon(cnx.run_id, save_path)
+
+        # Log to model vectors
+        self.vectors[poly_name] = VectorDataset(
+            poly_name,
+            str(save_path.relative_to(self._context.model_root)),
+            DatasetMetadata("file", str(cnx.model_path)),
+            self._context,
+        )
+
+    def export_stl(
+        self, run_id: str, save_path: str | Path, clip_buffer: float = 20
+    ) -> None:
+        run = self.runs[run_id]
+        domain = self.domains[run.domain]
+        transform = domain.transform
+
+        # Export stage transfer line from d/s model
+        pt = line_interpolate_point(
+            self.vectors["centerline"].shape,
+            0.05,
+            normalized=True,
+        )
+        clipper = run.inundation_polygon(transform).buffer(clip_buffer)
+        export_wse_contour(
+            domain.terrain.path,
+            run.depth_file_paths[-1],
+            pt,
+            save_path,
+            clip_poly=clipper,
+        )
+
+    def import_connection_stl(
+        self, cnx_idx: str, f_type: str = "parquet", clip_buffer: float = 20
+    ) -> None:
+        # Load d/s model
+        cnx = self.connections[cnx_idx]
+        tmp_model = HydraulicModel.from_file(cnx.model_path)
+
+        # Export inundation polygon
+        stl_name = f"{tmp_model.metadata.title}_{cnx.idx}_stl"
+        vector_dir = self._context.model_root / DEFAULT_VECTOR_DIR
+        save_path = vector_dir / f"{stl_name}.{f_type}"
+        tmp_model.export_stl(cnx.run_id, save_path, clip_buffer=clip_buffer)
+
+        # Log to model vectors
+        self.vectors[stl_name] = VectorDataset(
+            stl_name,
+            str(save_path.relative_to(self._context.model_root)),
+            DatasetMetadata("file", str(cnx.model_path)),
+            self._context,
+        )
 
     def _process_bc_lines(
         self, bcs: list[BoundaryCondition], domain: ModelDomain

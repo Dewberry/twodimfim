@@ -17,6 +17,8 @@ MARKDOWN_DIVIDER = """
             </div>
             """
 
+DEFAULT_VECTOR_FILE_TYPE = "geojson"
+
 
 ### BASEMAP LAYERS ###
 

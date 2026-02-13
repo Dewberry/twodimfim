@@ -5,9 +5,10 @@ import pandas as pd
 import requests
 import streamlit as st
 from pyproj import CRS
+from shapely import line_interpolate_point
 from shapely.ops import unary_union
 
-from app.consts import BASE_URL, DATA_DIR, MARKDOWN_DIVIDER
+from app.consts import BASE_URL, DATA_DIR, DEFAULT_VECTOR_FILE_TYPE, MARKDOWN_DIVIDER
 from app.editor.functions import (
     make_new_empty_model,
     make_new_hydrofabric_model,
@@ -16,6 +17,8 @@ from app.editor.functions import (
     run_model,
     save_model,
 )
+from app.utils import list_models
+from app.viewer.functions import add_vector_layer, sync_layers
 from twodimfim.consts import HYDROFABRIC_DIR
 from twodimfim.models.data_models import (
     BoundaryCondition,
@@ -26,7 +29,7 @@ from twodimfim.models.data_models import (
     ModelDomain,
     VectorDataset,
 )
-from twodimfim.utils.geospatial import BBox
+from twodimfim.utils.geospatial import BBox, export_wse_contour
 
 ### WIDGETS ###
 
@@ -90,9 +93,15 @@ def new_model():
         hf = st.selectbox(label="Hydrofabric Source", options=hf_available)
         reach_id = st.number_input(label="Reach ID", step=1)
         resolution = st.number_input(label="Model Resolution (m)", value=10)
-        inflow_width = st.number_input(label="Inflow Width (m)", value=100)
+        ds_connection_run = st.text_input(
+            label="(optional) Downstream connection run", value=""
+        )
+        if ds_connection_run == "":
+            ds_connection_run = None
         if st.button("Create Model", key="hydrofabric_model"):
-            make_new_hydrofabric_model(hf.resolve(), reach_id, resolution, inflow_width)
+            make_new_hydrofabric_model(
+                hf.resolve(), reach_id, resolution, ds_connection_run
+            )
             st.rerun()
     with t2:
         model_id = st.text_input(label="Model ID", value="")

@@ -276,7 +276,6 @@ class ReachContext:
         export_dir: str | Path,
         walk_us_dist_pct: float = 0.25,
         inflow_width: float = 10,
-        buffer: float = 100,
         ftype: str = "parquet",
         resolution: float = 10,
     ) -> dict[str, str]:
@@ -288,28 +287,5 @@ class ReachContext:
         out_path = Path(export_dir) / f"us_bc_line.{ftype}"
         self.export_shape(us_bc, out_path)
         out_dict["us_bc_line"] = str(out_path)
-
-        bbox = BBox(*unary_union([self.divide, us_bc]).bounds)
-        bbox.buffer(buffer)
-        bbox_shape = box(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)
-        out_path = Path(export_dir) / f"bbox.{ftype}"
-        self.export_shape(bbox_shape, out_path)
-        out_dict["bbox"] = str(out_path)
-
-        try:
-            transfer_line = self.make_transfer_line()
-            out_path = Path(export_dir) / f"transfer.{ftype}"
-            self.export_shape(transfer_line, out_path)
-            out_dict["transfer"] = str(out_path)
-        except DownstreamModelMisalignmentError:
-            pass
-
-        try:
-            transfer_line_offset = self.make_transfer_line_offset(resolution)
-            out_path = Path(export_dir) / f"transfer_offset.{ftype}"
-            self.export_shape(transfer_line_offset, out_path)
-            out_dict["transfer_offset"] = str(out_path)
-        except DownstreamModelMisalignmentError:
-            pass
 
         return out_dict

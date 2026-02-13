@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 from pyproj import CRS
 
-from app.consts import BASE_URL, DATA_DIR, REMOTE_DATA_DIR
+from app.consts import BASE_URL, DATA_DIR, DEFAULT_VECTOR_FILE_TYPE, REMOTE_DATA_DIR
 from twodimfim.models.data_models import (
     HydraulicModel,
     HydraulicModelContext,
@@ -15,7 +15,10 @@ from twodimfim.models.data_models import (
 
 
 def make_new_hydrofabric_model(
-    gpkg_path: str | Path, reach_id: int, resolution: float, inflow_width: float
+    gpkg_path: str | Path,
+    reach_id: int,
+    resolution: float,
+    ds_run: str | None = None,
 ):
     """Create a new HydraulicModel and store it in session state."""
     model_root = Path(DATA_DIR) / str(reach_id)
@@ -24,8 +27,8 @@ def make_new_hydrofabric_model(
         reach_id,
         resolution,
         model_root,
-        inflow_width=inflow_width,
-        vector_ftype="shp",
+        vector_ftype=DEFAULT_VECTOR_FILE_TYPE,
+        ds_run=ds_run,
     )
     st.session_state["model"].save()
 
