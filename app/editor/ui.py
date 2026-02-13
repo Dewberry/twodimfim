@@ -406,9 +406,27 @@ def connection_editor():
 
     # Edit dialog
     if cnx_ is not None:
-        c = st.session_state["model"].connections[cnx_]
-        text = f"**ID**: {c.idx}\n\n**Model Path**: {c.model_path}\n\n**Run ID**: {c.run_id}\n\n"
-        st.markdown(text)
+        cols = st.columns(2, vertical_alignment="top")
+        with cols[0]:
+            c = st.session_state["model"].connections[cnx_]
+            text = f"**ID**: {c.idx}\n\n**Model Path**: {c.model_path}\n\n**Run ID**: {c.run_id}\n\n"
+            st.markdown("#### Connection Information")
+            st.markdown(text)
+        with cols[1]:
+            st.markdown("#### Import Geometry")
+            if st.button("Import Inundation Polygon", width="stretch"):
+                st.session_state["model"].import_connection_inun_poly(
+                    cnx_, f_type=DEFAULT_VECTOR_FILE_TYPE
+                )
+                st.toast(
+                    "Imported Connection Inundation Polygon",
+                    icon=":material/download_done:",
+                )
+            if st.button("Import STL", width="stretch"):
+                st.session_state["model"].import_connection_stl(
+                    cnx_, f_type=DEFAULT_VECTOR_FILE_TYPE
+                )
+                st.toast("Imported Connection STL", icon=":material/download_done:")
 
 
 def run_editor():
