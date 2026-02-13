@@ -605,7 +605,6 @@ class HydraulicModel:
         resolution: float,
         model_root: str | Path,
         walk_us_dist_pct: float = 0.25,
-        inflow_width: float = 10,
         domain_buffer: float = 100,
         crs: str = COMMON_CRS,
         metadata: dict = {},
