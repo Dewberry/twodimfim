@@ -126,12 +126,7 @@ def delete_model():
 @st.dialog("Load a model")
 def load_model():
     """Load a HydraulicModel from disk into session state."""
-    all_models = [
-        str(i.name)
-        for i in Path(DATA_DIR).iterdir()
-        if i.is_dir() and (i / "model.json").exists()
-    ]
-    path = st.selectbox("Saved models", options=all_models)
+    path = st.selectbox("Saved models", options=list_models())
     if st.button("Open model"):
         st.session_state["model"] = HydraulicModel.from_file(
             Path(DATA_DIR) / path / "model.json"
@@ -234,12 +229,7 @@ def vector_dir_list(path: Path) -> list[Path]:
 def new_connection():
     """Create a connection to another HydraulicModelRun."""
     idx = st.text_input("Connection ID")
-    all_models = [
-        str(i.name)
-        for i in Path(DATA_DIR).iterdir()
-        if i.is_dir() and (i / "model.json").exists()
-    ]
-    path = st.selectbox("Saved models", options=all_models)
+    path = st.selectbox("Saved models", options=list_models())
     if path is not None:
         model_path = Path(DATA_DIR) / path / "model.json"
         tmp_model = HydraulicModel.from_file(model_path)
@@ -250,7 +240,7 @@ def new_connection():
         disable = True
     run_id = st.selectbox("Model runs", options=run_opts, disabled=disable)
     if st.button("Create connection", disabled=run_id is None):
-        st.session_state["model"].add_connection(idx, model_path, run_id)
+        st.session_state["model"].add_connection(idx, str(model_path), run_id)
         st.rerun()
 
 
