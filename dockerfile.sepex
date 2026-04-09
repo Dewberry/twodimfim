@@ -1,0 +1,8 @@
+FROM sepex-adapter:latest AS base
+FROM 172866912423.dkr.ecr.us-east-1.amazonaws.com/lisflood-fp:latest-gpu
+
+COPY --from=base /payload-writer ./payload-writer
+COPY engrypoint.sh ./entrypoint.sh
+RUN chmod +x ./payload-writer ./entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]
